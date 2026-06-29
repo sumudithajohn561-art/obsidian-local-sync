@@ -20,10 +20,15 @@ jobs:
         env:
           ANDROID_HOME: /usr/local/lib/android/sdk
         run: |
-          echo "sdk.dir=/usr/local/lib/android/sdk" > obsidian-quick-capture/local.properties
+          # 列出可用的 SDK 组件
+          ls $ANDROID_HOME/platforms/ 2>/dev/null || echo "no platforms"
+          ls $ANDROID_HOME/build-tools/ 2>/dev/null || echo "no build-tools"
+          # 如果需要，安装 SDK 34
+          yes | $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager "platforms;android-34" "build-tools;34.0.0" 2>/dev/null || echo "sdkmanager not available (will use Gradle auto-download)"
+          echo "sdk.dir=$ANDROID_HOME" > obsidian-quick-capture/local.properties
           cd obsidian-quick-capture
           chmod +x gradlew
-          ./gradlew assembleDebug
+          ./gradlew assembleDebug 2>&1 | tail -50
 
       - uses: actions/upload-artifact@v4
         with:
