@@ -1,45 +1,36 @@
-name: Build & Release
+name: Build
 
 on:
   push:
     branches: [main, master]
-    tags:
-      - 'v*'
   workflow_dispatch:
 
 jobs:
   build-android:
-    name: Build Android APK
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
-      - name: Setup Java
-        uses: actions/setup-java@v4
+      - uses: actions/setup-java@v4
         with:
           java-version: '17'
           distribution: 'temurin'
 
-      - name: Setup Android SDK
-        uses: android-actions/setup-android@v3
-
-      - name: Setup Gradle
-        uses: gradle/actions/setup-gradle@v4
-
-      - name: Build
+      - name: Build APK
+        env:
+          ANDROID_HOME: /usr/local/lib/android/sdk
         run: |
-          echo "sdk.dir=$ANDROID_SDK_ROOT" > obsidian-quick-capture/local.properties
+          echo "sdk.dir=/usr/local/lib/android/sdk" > obsidian-quick-capture/local.properties
           cd obsidian-quick-capture
           chmod +x gradlew
           ./gradlew assembleDebug
 
       - uses: actions/upload-artifact@v4
         with:
-          name: quick-capture-debug
+          name: quick-capture-apk
           path: obsidian-quick-capture/app/build/outputs/apk/debug/app-debug.apk
 
   build-plugin:
-    name: Build Obsidian Plugin
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
