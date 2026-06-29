@@ -8,7 +8,6 @@ on:
   workflow_dispatch:
 
 jobs:
-  # ============ Android APK 构建 ============
   build-android:
     name: Build Android APK
     runs-on: ubuntu-latest
@@ -22,81 +21,34 @@ jobs:
           distribution: 'temurin'
 
       - name: Setup Android SDK
-        uses: amyu/setup-android@v5
-        with:
-          sdk-version: 34
-          build-tools-version: 34.0.0
+        uses: android-actions/setup-android@v3
 
-      - name: Build Debug APK
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Build
         run: |
-          echo "ANDROID_SDK_ROOT=$ANDROID_SDK_ROOT"
-          echo "ANDROID_HOME=$ANDROID_HOME"
-          echo "JAVA_HOME=$JAVA_HOME"
+          echo "sdk.dir=$ANDROID_SDK_ROOT" > obsidian-quick-capture/local.properties
           cd obsidian-quick-capture
-          echo "sdk.dir=$ANDROID_SDK_ROOT" > local.properties
           chmod +x gradlew
-          ./gradlew assembleDebug --stacktrace
+          ./gradlew assembleDebug
 
-      - name: Upload APK
-        uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v4
         with:
           name: quick-capture-debug
           path: obsidian-quick-capture/app/build/outputs/apk/debug/app-debug.apk
 
-  # ============ Obsidian 插件构建 ============
   build-plugin:
     name: Build Obsidian Plugin
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
+      - uses: actions/setup-node@v4
         with:
           node-version: '22'
-
-      - name: Install Dependencies
-        run: |
-          cd obsidian-local-sync
-          npm ci
-
-      - name: Build Plugin
-        run: |
-          cd obsidian-local-sync
-          npm run build
-
-      - name: Package Plugin
-        run: |
-          cd obsidian-local-sync
-          zip -r obsidian-local-inbox-sync.zip main.js manifest.json styles.css
-
-      - name: Upload Plugin
-        uses: actions/upload-artifact@v4
+      - run: cd obsidian-local-sync && npm ci && npm run build
+      - run: cd obsidian-local-sync && zip -r obsidian-local-inbox-sync.zip main.js manifest.json styles.css
+      - uses: actions/upload-artifact@v4
         with:
           name: obsidian-plugin
           path: obsidian-local-sync/obsidian-local-inbox-sync.zip
-
-  # ============ Release (仅 tag 推送时触发) ============
-  release:
-    name: Create Release
-    if: startsWith(github.ref, 'refs/tags/v')
-    needs: [build-android, build-plugin]
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/download-artifact@v4
-        with:
-          name: quick-capture-debug
-          path: ./release
-
-      - uses: actions/download-artifact@v4
-        with:
-          name: obsidian-plugin
-          path: ./release
-
-      - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2
-        with:
-          files: |
-            ./release/app-debug.apk
-            ./release/obsidian-local-inbox-sync.zip
-          generate_release_notes: true
