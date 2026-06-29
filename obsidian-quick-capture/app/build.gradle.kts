@@ -58,7 +58,4 @@ dependencies {
 
     // Coroutines
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.3")
-
-    // FileProvider for sharing attachments
-    implementation("androidx.core:core:1.12.0")
 }
