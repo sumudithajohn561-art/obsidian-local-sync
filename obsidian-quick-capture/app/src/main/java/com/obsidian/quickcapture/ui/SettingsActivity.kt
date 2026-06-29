@@ -77,7 +77,7 @@ fun SettingsScreen() {
 
             Spacer(modifier = Modifier.height(24.dp))
 
-            HorizontalDivider()
+            Divider()
 
             Spacer(modifier = Modifier.height(16.dp))
 

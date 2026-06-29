@@ -75,10 +75,7 @@ object ContentClassifier {
      * 从微信分享公众号文章时，格式通常为 "标题\nURL"
      */
     private fun containsUrl(text: String): Boolean {
-        val urlPattern = Regex(
-            "https?://[\\w\\-]+(\\.[\\w\\-]+)+([\\w\\-.,@?^=%&:/~+#]*[\\w\\-@?^=%&/~+#])?"
-        )
-        return urlPattern.containsMatchIn(text)
+        return text.contains(Regex("https?://[a-zA-Z0-9\\-._~:/?#\\[\\]@!$&'()*+,;=%]+"))
     }
 
     /**
