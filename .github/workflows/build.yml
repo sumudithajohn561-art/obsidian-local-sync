@@ -29,9 +29,13 @@ jobs:
 
       - name: Build Debug APK
         run: |
+          echo "ANDROID_SDK_ROOT=$ANDROID_SDK_ROOT"
+          echo "ANDROID_HOME=$ANDROID_HOME"
+          echo "JAVA_HOME=$JAVA_HOME"
           cd obsidian-quick-capture
+          echo "sdk.dir=$ANDROID_SDK_ROOT" > local.properties
           chmod +x gradlew
-          ./gradlew assembleDebug
+          ./gradlew assembleDebug --stacktrace
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
