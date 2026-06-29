@@ -5,6 +5,7 @@ import { InboxWatcher } from "./src/watcher/InboxWatcher";
 import { Pipeline } from "./src/pipeline/Pipeline";
 import { Logger } from "./src/utils/Logger";
 import * as path from "path";
+import * as fs from "fs";
 
 const log = new Logger("Plugin");
 
@@ -31,7 +32,7 @@ export default class LocalInboxSyncPlugin extends Plugin {
         this.statusBarItem.setText("📥 扫描收件箱...");
 
         // 启动时自动扫描已有文件（处理插件未运行期间到达的素材）
-        this.manualScan();
+        this.manualScan().catch(e => log.error("启动扫描失败:", e));
 
         // 命令: 手动扫描收件箱
         this.addCommand({
@@ -88,10 +89,11 @@ export default class LocalInboxSyncPlugin extends Plugin {
             log.warn("管道未启动");
             return;
         }
-        const fs = await import("fs");
         const inboxPath = this.settings.inboxPath;
+        log.info(`扫描收件箱: ${inboxPath}`);
         if (!fs.existsSync(inboxPath)) {
             log.warn(`收件箱路径不存在: ${inboxPath}`);
+            if (this.statusBarItem) this.statusBarItem.setText("📥 收件箱路径不存在");
             return;
         }
         const files = fs.readdirSync(inboxPath).filter(f => f.endsWith(".md"));

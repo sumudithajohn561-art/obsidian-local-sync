@@ -23,20 +23,20 @@ jobs:
 
       - name: Setup Android SDK
         run: |
-          yes | $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager --licenses
-          $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager "platforms;android-34" "build-tools;34.0.0"
+          # 接受许可
+          yes | ${ANDROID_SDK_ROOT}/cmdline-tools/latest/bin/sdkmanager --licenses > /dev/null 2>&1 || true
+          # 安装需要的 SDK 组件
+          ${ANDROID_SDK_ROOT}/cmdline-tools/latest/bin/sdkmanager \
+            "platforms;android-34" "build-tools;34.0.0" > /dev/null 2>&1 || true
+          echo "ANDROID_SDK_ROOT=${ANDROID_SDK_ROOT}"
 
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v4
 
-      - name: Generate Gradle Wrapper
-        run: |
-          cd obsidian-quick-capture
-          gradle wrapper --gradle-version 8.2
-
       - name: Build Debug APK
         run: |
           cd obsidian-quick-capture
+          chmod +x gradlew
           ./gradlew assembleDebug
 
       - name: Upload APK
