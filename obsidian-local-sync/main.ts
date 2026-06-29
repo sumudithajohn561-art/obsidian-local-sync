@@ -28,7 +28,10 @@ export default class LocalInboxSyncPlugin extends Plugin {
 
         // 状态栏指示器
         this.statusBarItem = this.addStatusBarItem();
-        this.statusBarItem.setText("📥 收件箱监听中...");
+        this.statusBarItem.setText("📥 扫描收件箱...");
+
+        // 启动时自动扫描已有文件（处理插件未运行期间到达的素材）
+        this.manualScan();
 
         // 命令: 手动扫描收件箱
         this.addCommand({
@@ -96,6 +99,9 @@ export default class LocalInboxSyncPlugin extends Plugin {
         for (const file of files) {
             const filePath = path.join(inboxPath, file);
             await this.pipeline.handleFile(filePath);
+        }
+        if (this.statusBarItem) {
+            this.statusBarItem.setText("📥 收件箱监听中...");
         }
     }
 
