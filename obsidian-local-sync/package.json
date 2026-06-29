@@ -1,0 +1,27 @@
+{
+  "name": "obsidian-local-inbox-sync",
+  "version": "1.0.0",
+  "description": "本地收件箱同步 Obsidian 插件",
+  "main": "main.js",
+  "scripts": {
+    "dev": "node esbuild.config.mjs",
+    "build": "tsc -noEmit -skipLibCheck && node esbuild.config.mjs production",
+    "lint": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@mozilla/readability": "^0.5.0",
+    "chokidar": "^3.6.0",
+    "jsdom": "^24.0.0",
+    "turndown": "^7.1.0",
+    "yaml": "^2.4.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.0",
+    "@types/turndown": "^5.0.4",
+    "@types/jsdom": "^21.1.6",
+    "builtin-modules": "^4.0.0",
+    "esbuild": "^0.20.0",
+    "obsidian": "latest",
+    "typescript": "^5.3.3"
+  }
+}

@@ -1,0 +1,24 @@
+# 构建产物
+obsidian-quick-capture/app/build/
+obsidian-quick-capture/.gradle/
+obsidian-quick-capture/build/
+obsidian-quick-capture/*.apk
+obsidian-quick-capture/*.aab
+
+# Obsidian 插件
+obsidian-local-sync/node_modules/
+obsidian-local-sync/main.js
+
+# IDE
+.idea/
+*.iml
+.vscode/
+
+# 系统文件
+.DS_Store
+Thumbs.db
+*.log
+*.tmp
+
+# Playwright
+.playwright-mcp/

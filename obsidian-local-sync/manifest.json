@@ -1,0 +1,9 @@
+{
+  "id": "obsidian-local-inbox-sync",
+  "name": "Local Inbox Sync",
+  "version": "1.0.0",
+  "minAppVersion": "0.15.0",
+  "description": "本地收件箱同步——监听Syncthing文件夹，自动处理从手机分享过来的素材。不经过任何云服务，纯本地运行。",
+  "author": "Obsidian Sync Tool",
+  "isDesktopOnly": true
+}

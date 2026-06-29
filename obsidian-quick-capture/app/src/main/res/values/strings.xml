@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Quick Capture</string>
+    <string name="saved_toast">已保存到 Obsidian 收件箱</string>
+    <string name="save_failed">保存失败，请检查权限</string>
+    <string name="permission_required">需要存储权限才能访问 Syncthing 文件夹</string>
+    <string name="go_to_settings">前往设置</string>
+</resources>

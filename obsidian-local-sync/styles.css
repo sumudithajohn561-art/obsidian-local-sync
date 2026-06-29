@@ -1,0 +1,18 @@
+/**
+ * Local Inbox Sync - 设置面板样式
+ */
+.inbox-sync-settings .setting-item-description {
+    color: var(--text-muted);
+}
+.inbox-sync-status {
+    padding: 8px 12px;
+    border-radius: 4px;
+    background: var(--background-secondary);
+    margin: 8px 0;
+}
+.inbox-sync-status.connected {
+    border-left: 3px solid var(--color-green);
+}
+.inbox-sync-status.disconnected {
+    border-left: 3px solid var(--color-red);
+}
