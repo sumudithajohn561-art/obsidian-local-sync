@@ -60,7 +60,4 @@ dependencies {
 
     // OkHttp (HTTP 直传)
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
-
-    // JSON (替代Room，简化离线队列)
-    implementation("org.json:json:20231013")
 }
