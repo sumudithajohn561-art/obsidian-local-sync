@@ -19,7 +19,7 @@
         android:icon="@mipmap/ic_launcher"
         android:label="Quick Capture"
         android:supportsRtl="true"
-        android:theme="@style/Theme.AppCompat.NoActionBar">
+        android:theme="@style/Theme.QuickCapture">
 
         <!-- 设置界面 -->
         <activity
@@ -31,8 +31,7 @@
         <activity
             android:name=".MainActivity"
             android:exported="true"
-            android:launchMode="singleTask"
-            android:theme="@style/Theme.AppCompat.NoActionBar">
+            android:launchMode="singleTask">
 
             <!-- 桌面启动器 -->
             <intent-filter>
