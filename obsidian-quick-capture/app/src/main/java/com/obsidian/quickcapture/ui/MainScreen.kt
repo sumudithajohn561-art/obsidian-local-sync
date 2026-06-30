@@ -23,7 +23,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.obsidian.quickcapture.network.MdnsDiscovery.DiscoveredServer
-import com.obsidian.quickcapture.network.PendingCapture
+import org.json.JSONObject
 
 /**
  * Quick Capture 主屏幕
@@ -39,7 +39,7 @@ import com.obsidian.quickcapture.network.PendingCapture
 fun QuickCaptureScreen(
     serverState: ServerState,
     queueCount: Int,
-    recentCaptures: List<PendingCapture>,
+    recentCaptures: List<JSONObject>,
     onPaste: (String) -> Unit,
     onSettings: () -> Unit
 ) {
@@ -190,7 +190,7 @@ fun ConnectionIndicator(state: ServerState) {
 
 // ========== 捕获列表项 ==========
 @Composable
-fun CaptureItem(item: PendingCapture) {
+fun CaptureItem(item: JSONObject) {
     Surface(
         modifier = Modifier
             .fillMaxWidth()
@@ -200,7 +200,7 @@ fun CaptureItem(item: PendingCapture) {
     ) {
         Column(modifier = Modifier.padding(12.dp)) {
             Text(
-                text = item.title,
+                text = item.optString("title", "未命名"),
                 fontSize = 15.sp,
                 fontWeight = FontWeight.Medium,
                 maxLines = 1,
@@ -209,13 +209,13 @@ fun CaptureItem(item: PendingCapture) {
             Spacer(modifier = Modifier.height(4.dp))
             Row {
                 Text(
-                    text = item.source,
+                    text = item.optString("source", ""),
                     fontSize = 12.sp,
                     color = Color.Gray
                 )
                 Spacer(modifier = Modifier.width(8.dp))
                 Text(
-                    text = formatTimeAgo(item.createdAt),
+                    text = formatTimeAgo(item.optLong("created_at", 0)),
                     fontSize = 12.sp,
                     color = Color.LightGray
                 )
