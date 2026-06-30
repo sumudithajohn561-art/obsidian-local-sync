@@ -5,155 +5,101 @@ import android.os.Bundle
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
-import androidx.compose.material3.MaterialTheme
+import androidx.compose.foundation.layout.*
+import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import com.obsidian.quickcapture.content.ContentClassifier
 import com.obsidian.quickcapture.content.ContentExtractor
-import com.obsidian.quickcapture.content.SharedContent
 import com.obsidian.quickcapture.markdown.MarkdownGenerator
 import com.obsidian.quickcapture.network.HttpSender
 import com.obsidian.quickcapture.network.MdnsDiscovery
 import com.obsidian.quickcapture.network.MdnsDiscovery.DiscoveredServer
 import com.obsidian.quickcapture.network.OfflineQueue
-import com.obsidian.quickcapture.ui.QuickCaptureScreen
-import com.obsidian.quickcapture.ui.ServerState
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.collectLatest
-import org.json.JSONObject
 
 class MainActivity : ComponentActivity() {
 
     private val scope = CoroutineScope(Dispatchers.Main + SupervisorJob())
     private val queue by lazy { OfflineQueue(this) }
-    private var serverState by mutableStateOf<ServerState>(ServerState.Disconnected)
     private var discoveredServer: DiscoveredServer? = null
-    private var queueCount by mutableStateOf(0)
-    private var recentCaptures by mutableStateOf<List<JSONObject>>(emptyList())
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
-        // 启动 mDNS 发现
-        startDiscovery()
-
         when (intent?.action) {
-            Intent.ACTION_SEND -> {
-                handleShare(intent, false)
+            Intent.ACTION_SEND, Intent.ACTION_SEND_MULTIPLE -> {
+                handleShare(intent)
                 return
             }
-            Intent.ACTION_SEND_MULTIPLE -> {
-                handleShare(intent, true)
-                return
-            }
-            else -> showMainScreen()
-        }
-    }
-
-    private fun startDiscovery() {
-        scope.launch {
-            serverState = ServerState.Connecting
-            MdnsDiscovery.discover(this@MainActivity).collectLatest { server ->
-                discoveredServer = server
-                serverState = ServerState.Connected(server)
-                scope.launch { flushQueue(server) }
-            }
-        }
-        scope.launch {
-            delay(5000)
-            if (serverState is ServerState.Connecting) {
-                serverState = ServerState.Disconnected
-            }
-        }
-        scope.launch {
-            while (isActive) {
-                queueCount = queue.count()
-                recentCaptures = queue.getAll()
-                delay(3000)
+            else -> {
+                setContent {
+                    Surface(
+                        modifier = Modifier.fillMaxSize(),
+                        color = Color.White
+                    ) {
+                        Column(
+                            modifier = Modifier.fillMaxSize().padding(32.dp),
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            verticalArrangement = Arrangement.Center
+                        ) {
+                            Text("Quick Capture", fontSize = 24.sp, fontWeight = FontWeight.Bold, color = Color(0xFF1A1A2E))
+                            Spacer(Modifier.height(24.dp))
+                            Text("在微信中分享内容到此App", fontSize = 16.sp, color = Color.Gray)
+                            Spacer(Modifier.height(8.dp))
+                            Text("素材会自动同步到Obsidian", fontSize = 14.sp, color = Color.LightGray)
+                        }
+                    }
+                }
+                startDiscovery()
             }
         }
     }
 
-    private suspend fun flushQueue(server: DiscoveredServer) {
-        val sent = queue.flushAll(server.url) { item ->
-            HttpSender.send(
-                server.url, item.optString("title"), item.optString("body"),
-                item.optString("url").ifBlank { null },
-                item.optString("source_type"), item.optString("source")
-            ).success
-        }
-        if (sent > 0) {
-            withContext(Dispatchers.Main) {
-                Toast.makeText(this@MainActivity, "已同步 $sent 条离线内容", Toast.LENGTH_SHORT).show()
-            }
-        }
-    }
-
-    private fun handleShare(intent: Intent?, isMultiple: Boolean) {
+    private fun handleShare(intent: Intent?) {
         if (intent == null) { finish(); return }
         scope.launch {
-            if (isMultiple) handleMultiple(intent) else {
-                processAndSend(ContentExtractor.extract(intent))
+            try {
+                val content = ContentExtractor.extract(intent)
+                val type = ContentClassifier.classify(content.mimeType, content.body)
+                val source = ContentClassifier.extractSource(content.body)
+                val md = MarkdownGenerator.generate(content, type, source)
+
+                val server = discoveredServer
+                if (server != null) {
+                    val r = HttpSender.sendMarkdown(server.url, md)
+                    if (r.success) {
+                        withContext(Dispatchers.Main) {
+                            Toast.makeText(this@MainActivity, "已保存", Toast.LENGTH_SHORT).show()
+                        }
+                        finish(); return@launch
+                    }
+                }
+                queue.enqueue(content.title, content.body, content.url, type.frontmatterValue, source, md)
+                withContext(Dispatchers.Main) {
+                    Toast.makeText(this@MainActivity, "已排队", Toast.LENGTH_SHORT).show()
+                }
+            } catch (e: Exception) {
+                withContext(Dispatchers.Main) {
+                    Toast.makeText(this@MainActivity, "失败: ${e.message}", Toast.LENGTH_SHORT).show()
+                }
             }
             finish()
         }
     }
 
-    private suspend fun processAndSend(content: SharedContent) {
-        val contentType = ContentClassifier.classify(content.mimeType, content.body)
-        val source = ContentClassifier.extractSource(content.body)
-        val markdown = MarkdownGenerator.generate(content, contentType, source)
-
-        val server = discoveredServer
-        if (server != null) {
-            val result = HttpSender.sendMarkdown(server.url, markdown)
-            if (result.success) {
-                withContext(Dispatchers.Main) {
-                    Toast.makeText(this@MainActivity, "已保存", Toast.LENGTH_SHORT).show()
-                }
-                return
+    private fun startDiscovery() {
+        scope.launch {
+            MdnsDiscovery.discover(this@MainActivity).collectLatest { server ->
+                discoveredServer = server
             }
         }
-
-        queue.enqueue(content.title, content.body, content.url, contentType.frontmatterValue, source, markdown)
-        withContext(Dispatchers.Main) {
-            Toast.makeText(this@MainActivity, "已排队", Toast.LENGTH_SHORT).show()
-        }
-    }
-
-    private suspend fun handleMultiple(intent: Intent) {
-        val clipData = intent.clipData ?: return
-        for (i in 0 until clipData.itemCount) {
-            val itemIntent = Intent().apply {
-                action = Intent.ACTION_SEND; type = intent.type
-                putExtra(Intent.EXTRA_TEXT, clipData.getItemAt(i).text)
-                putExtra(Intent.EXTRA_STREAM, clipData.getItemAt(i).uri)
-            }
-            processAndSend(ContentExtractor.extract(itemIntent))
-        }
-    }
-
-    private fun showMainScreen() {
-        setContent {
-            MaterialTheme {
-                QuickCaptureScreen(
-                    serverState = serverState,
-                    queueCount = queueCount,
-                    recentCaptures = recentCaptures,
-                    onPaste = { text -> scope.launch { handlePaste(text) } },
-                    onSettings = {}
-                )
-            }
-        }
-    }
-
-    private suspend fun handlePaste(text: String) {
-        processAndSend(SharedContent(
-            title = if (text.startsWith("http")) "手动粘贴" else text.take(50),
-            body = text, url = if (text.startsWith("http")) text else null,
-            mimeType = "text/plain", attachmentUri = null, attachmentFileName = null
-        ))
-        queueCount = queue.count()
-        recentCaptures = queue.getAll()
     }
 
     override fun onDestroy() {
