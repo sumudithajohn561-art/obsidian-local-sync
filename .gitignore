@@ -9,6 +9,9 @@ obsidian-quick-capture/*.aab
 obsidian-local-sync/node_modules/
 obsidian-local-sync/main.js
 
+# local-server
+local-server/node_modules/
+
 # IDE
 .idea/
 *.iml

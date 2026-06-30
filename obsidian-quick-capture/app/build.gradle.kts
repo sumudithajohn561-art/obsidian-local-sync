@@ -1,6 +1,7 @@
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
+    id("kotlin-kapt")
 }
 
 android {
@@ -57,4 +58,18 @@ dependencies {
 
     // Coroutines
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.3")
+
+    // OkHttp (HTTP 直传)
+    implementation("com.squareup.okhttp3:okhttp:4.12.0")
+
+    // Room (离线队列)
+    implementation("androidx.room:room-runtime:2.6.1")
+    implementation("androidx.room:room-ktx:2.6.1")
+    kapt("androidx.room:room-compiler:2.6.1")
+
+    // WorkManager (后台重试)
+    implementation("androidx.work:work-runtime-ktx:2.9.0")
+
+    // Lifecycle (ViewModel)
+    implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.7.0")
 }

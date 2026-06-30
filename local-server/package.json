@@ -1,0 +1,13 @@
+{
+  "name": "obsidian-capture-server",
+  "version": "1.0.0",
+  "description": "手机直传 Obsidian 收件箱的本地 HTTP 服务器",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "bonjour": "^3.5.1",
+    "express": "^4.18.2"
+  }
+}

@@ -1,266 +1,185 @@
 package com.obsidian.quickcapture
 
-import android.Manifest
 import android.content.Intent
-import android.content.pm.PackageManager
-import android.net.Uri
-import android.os.Build
 import android.os.Bundle
-import android.os.Environment
-import android.provider.Settings
 import android.widget.Toast
 import androidx.activity.ComponentActivity
-import androidx.core.content.ContextCompat
+import androidx.activity.compose.setContent
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.runtime.*
 import com.obsidian.quickcapture.content.ContentClassifier
 import com.obsidian.quickcapture.content.ContentExtractor
+import com.obsidian.quickcapture.content.SharedContent
 import com.obsidian.quickcapture.markdown.MarkdownGenerator
-import com.obsidian.quickcapture.storage.FileWriter
+import com.obsidian.quickcapture.network.HttpSender
+import com.obsidian.quickcapture.network.MdnsDiscovery
+import com.obsidian.quickcapture.network.MdnsDiscovery.DiscoveredServer
+import com.obsidian.quickcapture.network.OfflineQueue
+import com.obsidian.quickcapture.ui.QuickCaptureScreen
+import com.obsidian.quickcapture.ui.ServerState
 import kotlinx.coroutines.*
-import java.io.File
+import kotlinx.coroutines.flow.collectLatest
 
-/**
- * 主 Activity — 接收 Android 分享 Intent
- *
- * 设计理念:
- * - 透明主题、秒开、无主界面
- * - 接收分享 → 处理 → 存文件 → Toast → 退出
- * - 全程在后台线程执行，不阻塞 UI
- * - 只保存原始素材，不做内容修改
- *
- * 从微信/浏览器等App点「分享」→ 选「Quick Capture」→ 进入这里
- */
 class MainActivity : ComponentActivity() {
 
-    private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
+    private val scope = CoroutineScope(Dispatchers.Main + SupervisorJob())
+    private lateinit var queue: OfflineQueue
+    private var serverState by mutableStateOf<ServerState>(ServerState.Disconnected)
+    private var discoveredServer: DiscoveredServer? = null
+    private var queueCount by mutableStateOf(0)
+    private var recentCaptures by mutableStateOf<List<com.obsidian.quickcapture.network.PendingCapture>>(emptyList())
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        queue = OfflineQueue(this)
 
-        // 首先检查存储权限
-        if (!hasStoragePermission()) {
-            requestStoragePermission()
-            return
-        }
+        // 启动 mDNS 发现
+        startDiscovery()
 
-        // 处理分享Intent
         when (intent?.action) {
-            Intent.ACTION_SEND -> handleSingleShare(intent)
-            Intent.ACTION_SEND_MULTIPLE -> handleMultipleShare(intent)
-            else -> {
-                // 不是分享进来的 (比如从启动器打开)，显示设置页
-                showSettings()
+            Intent.ACTION_SEND -> handleShare(intent, false)
+            Intent.ACTION_SEND_MULTIPLE -> handleShare(intent, true)
+            else -> showMainScreen()
+        }
+    }
+
+    // ========== mDNS 发现 ==========
+    private fun startDiscovery() {
+        scope.launch {
+            serverState = ServerState.Connecting
+            MdnsDiscovery.discover(this@MainActivity).collectLatest { server ->
+                discoveredServer = server
+                serverState = ServerState.Connected(server)
+                // 发现电脑后，尝试发送离线队列
+                flushQueue(server)
+            }
+        }
+        // 5秒后仍未发现，标记为未连接
+        scope.launch {
+            delay(5000)
+            if (serverState is ServerState.Connecting) {
+                serverState = ServerState.Disconnected
+            }
+        }
+        // 刷新队列信息
+        scope.launch {
+            while (isActive) {
+                queueCount = queue.count()
+                recentCaptures = queue.getAll()
+                delay(3000)
             }
         }
     }
 
-    /**
-     * 处理单条分享
-     */
-    private fun handleSingleShare(intent: Intent?) {
-        if (intent == null) {
-            finishWithToast("无法读取分享内容")
-            return
+    private suspend fun flushQueue(server: DiscoveredServer) {
+        val sent = queue.flushAll(server.url)
+        if (sent > 0) {
+            withContext(Dispatchers.Main) {
+                Toast.makeText(this@MainActivity, "已同步 $sent 条离线内容", Toast.LENGTH_SHORT).show()
+            }
+            queueCount = queue.count()
+            recentCaptures = queue.getAll()
         }
+    }
+
+    // ========== 分享处理 ==========
+    private fun handleShare(intent: Intent?, isMultiple: Boolean) {
+        if (intent == null) { finish(); return }
 
         scope.launch {
-            try {
-                // 1. 提取内容
+            if (isMultiple) {
+                handleMultiple(intent)
+            } else {
                 val content = ContentExtractor.extract(intent)
+                processAndSend(content)
+            }
+            finish()
+        }
+    }
 
-                // 2. 分类
-                val contentType = ContentClassifier.classify(
-                    mimeType = content.mimeType,
-                    contentText = content.body
+    private suspend fun processAndSend(content: SharedContent) {
+        // 分类
+        val contentType = ContentClassifier.classify(content.mimeType, content.body)
+        val source = ContentClassifier.extractSource(content.body)
+
+        // 生成 Markdown（无论哪种传输方式都需要）
+        val markdown = MarkdownGenerator.generate(content, contentType, source)
+
+        // 策略: HTTP 优先 → 失败则离线队列
+        val server = discoveredServer
+        if (server != null) {
+            val result = HttpSender.sendMarkdown(server.url, markdown)
+            if (result.success) {
+                withContext(Dispatchers.Main) {
+                    Toast.makeText(this@MainActivity, "已保存", Toast.LENGTH_SHORT).show()
+                }
+                return
+            }
+        }
+
+        // HTTP 失败 → 加入离线队列
+        queue.enqueue(
+            title = content.title,
+            body = content.body,
+            url = content.url,
+            sourceType = contentType.frontmatterValue,
+            source = source,
+            markdownContent = markdown
+        )
+        withContext(Dispatchers.Main) {
+            Toast.makeText(this@MainActivity, "已排队，连接WiFi后自动发送", Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    private suspend fun handleMultiple(intent: Intent) {
+        val clipData = intent.clipData ?: return
+        var count = 0
+        for (i in 0 until clipData.itemCount) {
+            val itemIntent = Intent().apply {
+                action = Intent.ACTION_SEND
+                type = intent.type
+                putExtra(Intent.EXTRA_TEXT, clipData.getItemAt(i).text)
+                putExtra(Intent.EXTRA_STREAM, clipData.getItemAt(i).uri)
+            }
+            processAndSend(ContentExtractor.extract(itemIntent))
+            count++
+        }
+        withContext(Dispatchers.Main) {
+            Toast.makeText(this@MainActivity, "已处理 $count 项", Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    // ========== 主屏幕 ==========
+    private fun showMainScreen() {
+        setContent {
+            MaterialTheme {
+                QuickCaptureScreen(
+                    serverState = serverState,
+                    queueCount = queueCount,
+                    recentCaptures = recentCaptures,
+                    onPaste = { text -> scope.launch { handlePaste(text) } },
+                    onSettings = { /* 滚动到底部即可 */ }
                 )
-
-                // 3. 提取来源
-                val source = ContentClassifier.extractSource(content.body)
-
-                // 4. 生成 Markdown
-                val markdown = MarkdownGenerator.generate(content, contentType, source)
-
-                // 5. 写入文件
-                val inboxDir = getInboxDirectory()
-                val writer = FileWriter(contentResolver, inboxDir)
-                val savedFile = writer.write(content, contentType, markdown)
-
-                if (savedFile != null) {
-                    withContext(Dispatchers.Main) {
-                        Toast.makeText(
-                            this@MainActivity,
-                            "已保存: ${savedFile.name}",
-                            Toast.LENGTH_SHORT
-                        ).show()
-                    }
-                } else {
-                    withContext(Dispatchers.Main) {
-                        Toast.makeText(
-                            this@MainActivity,
-                            "保存失败，请检查存储权限",
-                            Toast.LENGTH_LONG
-                        ).show()
-                    }
-                }
-            } catch (e: Exception) {
-                e.printStackTrace()
-                withContext(Dispatchers.Main) {
-                    Toast.makeText(
-                        this@MainActivity,
-                        "保存失败: ${e.message}",
-                        Toast.LENGTH_LONG
-                    ).show()
-                }
-            } finally {
-                // 无论成功失败，都关闭Activity
-                withContext(Dispatchers.Main) {
-                    finish()
-                }
             }
         }
     }
 
-    /**
-     * 处理多条分享 (多张图片等)
-     */
-    private fun handleMultipleShare(intent: Intent?) {
-        if (intent == null) {
-            finishWithToast("无法读取分享内容")
-            return
-        }
-
-        scope.launch {
-            var successCount = 0
-            var failCount = 0
-
-            try {
-                val clipData = intent.clipData
-                if (clipData != null) {
-                    for (i in 0 until clipData.itemCount) {
-                        val item = clipData.getItemAt(i)
-                        val itemIntent = Intent().apply {
-                            action = Intent.ACTION_SEND
-                            type = intent.type
-                            putExtra(Intent.EXTRA_TEXT, item.text)
-                            putExtra(Intent.EXTRA_STREAM, item.uri)
-                        }
-
-                        try {
-                            val content = ContentExtractor.extract(itemIntent)
-                            val contentType = ContentClassifier.classify(
-                                content.mimeType, content.body
-                            )
-                            val source = ContentClassifier.extractSource(content.body)
-                            val markdown = MarkdownGenerator.generate(content, contentType, source)
-                            val inboxDir = getInboxDirectory()
-                            val writer = FileWriter(contentResolver, inboxDir)
-                            val savedFile = writer.write(content, contentType, markdown)
-
-                            if (savedFile != null) successCount++ else failCount++
-                        } catch (e: Exception) {
-                            failCount++
-                        }
-                    }
-                }
-
-                withContext(Dispatchers.Main) {
-                    Toast.makeText(
-                        this@MainActivity,
-                        "已保存 $successCount 项" + if (failCount > 0) ", $failCount 项失败" else "",
-                        Toast.LENGTH_SHORT
-                    ).show()
-                }
-            } finally {
-                withContext(Dispatchers.Main) { finish() }
-            }
-        }
-    }
-
-    /**
-     * 显示设置界面
-     */
-    private fun showSettings() {
-        val intent = Intent(this, com.obsidian.quickcapture.ui.SettingsActivity::class.java)
-        startActivity(intent)
-        finish()
-    }
-
-    /**
-     * 快速关闭并提示
-     */
-    private fun finishWithToast(message: String) {
-        Toast.makeText(this, message, Toast.LENGTH_SHORT).show()
-        finish()
-    }
-
-    // ==================== 存储权限处理 ====================
-
-    /**
-     * 检查是否有足够的存储权限
-     *
-     * Android 10 以下: 检查 WRITE_EXTERNAL_STORAGE
-     * Android 10+: 检查 MANAGE_EXTERNAL_STORAGE
-     */
-    private fun hasStoragePermission(): Boolean {
-        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-            Environment.isExternalStorageManager()
-        } else {
-            ContextCompat.checkSelfPermission(
-                this, Manifest.permission.WRITE_EXTERNAL_STORAGE
-            ) == PackageManager.PERMISSION_GRANTED
-        }
-    }
-
-    /**
-     * 请求存储权限
-     */
-    private fun requestStoragePermission() {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-            // Android 10+: 跳转到系统设置页授权"管理所有文件"
-            val intent = Intent(Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION).apply {
-                data = Uri.parse("package:$packageName")
-            }
-            startActivity(intent)
-            Toast.makeText(
-                this,
-                "请授予「管理所有文件」权限，以便写入 Syncthing 文件夹",
-                Toast.LENGTH_LONG
-            ).show()
-        } else {
-            // Android 9 及以下
-            requestPermissions(
-                arrayOf(Manifest.permission.WRITE_EXTERNAL_STORAGE),
-                REQUEST_CODE_STORAGE
-            )
-        }
-        // 无法继续处理本次分享
-        finish()
-    }
-
-    /**
-     * 获取收件箱目录
-     *
-     * 按以下优先级尝试:
-     * 1. 默认 Syncthing 路径
-     * 2. 备用路径
-     * 3. App 私有目录 (最后兜底)
-     */
-    private fun getInboxDirectory(): File {
-        val default = FileWriter.DEFAULT_INBOX_PATH
-        if (default.exists() || default.mkdirs()) return default
-
-        val fallback = FileWriter.FALLBACK_INBOX_PATH
-        if (fallback.exists() || fallback.mkdirs()) return fallback
-
-        // 最终兜底: App 私有目录
-        return File(filesDir, "inbox").also { it.mkdirs() }
+    private suspend fun handlePaste(text: String) {
+        val content = SharedContent(
+            title = if (text.startsWith("http")) "手动粘贴" else text.take(50),
+            body = text,
+            url = if (text.startsWith("http")) text else null,
+            mimeType = "text/plain",
+            attachmentUri = null,
+            attachmentFileName = null
+        )
+        processAndSend(content)
+        queueCount = queue.count()
+        recentCaptures = queue.getAll()
     }
 
     override fun onDestroy() {
         super.onDestroy()
         scope.cancel()
-    }
-
-    companion object {
-        private const val REQUEST_CODE_STORAGE = 1001
     }
 }
