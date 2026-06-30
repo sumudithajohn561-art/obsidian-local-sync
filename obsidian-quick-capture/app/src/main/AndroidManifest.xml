@@ -21,16 +21,11 @@
         android:supportsRtl="true"
         android:theme="@style/Theme.AppCompat.NoActionBar">
 
-        <!-- 设置界面 - 也是桌面入口（用于首次授权） -->
+        <!-- 设置界面 -->
         <activity
             android:name=".ui.SettingsActivity"
-            android:exported="true"
-            android:label="Quick Capture">
-            <intent-filter>
-                <action android:name="android.intent.action.MAIN" />
-                <category android:name="android.intent.category.LAUNCHER" />
-            </intent-filter>
-        </activity>
+            android:exported="false"
+            android:label="Quick Capture 设置" />
 
         <!-- 主分享接收Activity - 透明主题，秒开 -->
         <activity
@@ -39,6 +34,12 @@
             android:excludeFromRecents="true"
             android:taskAffinity=""
             android:theme="@android:style/Theme.Translucent.NoTitleBar">
+
+            <!-- 桌面启动器 -->
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
 
             <!-- 接收单条分享 -->
             <intent-filter>
