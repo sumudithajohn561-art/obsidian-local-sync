@@ -8,41 +8,23 @@ import com.obsidian.quickcapture.content.ContentClassifier
 import com.obsidian.quickcapture.content.ContentExtractor
 import com.obsidian.quickcapture.markdown.MarkdownGenerator
 import com.obsidian.quickcapture.network.HttpSender
-import com.obsidian.quickcapture.network.MdnsDiscovery
-import com.obsidian.quickcapture.network.MdnsDiscovery.DiscoveredServer
-import com.obsidian.quickcapture.network.OfflineQueue
+import com.obsidian.quickcapture.storage.FileWriter
 import kotlinx.coroutines.*
-import kotlinx.coroutines.flow.collectLatest
+import java.io.File
 
 class MainActivity : ComponentActivity() {
 
     private val scope = CoroutineScope(Dispatchers.Main + SupervisorJob())
-    private val queue by lazy { OfflineQueue(this) }
-    private var discoveredServer: DiscoveredServer? = null
+    private var serverUrl: String? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        serverUrl = getSharedPreferences("capture", MODE_PRIVATE).getString("server_url", null)
 
-        // 读取手动配置的服务器地址
-        val savedUrl = getSharedPreferences("capture", MODE_PRIVATE).getString("server_url", null)
-        if (savedUrl != null) {
-            discoveredServer = DiscoveredServer("saved", savedUrl.replace("http://", "").split(":")[0], 19527)
-        }
-
-        // 同时尝试 mDNS
-        scope.launch {
-            try {
-                MdnsDiscovery.discover(this@MainActivity).collectLatest { server ->
-                    discoveredServer = server
-                }
-            } catch (_: Exception) {}
-        }
-
-        // 处理分享
         when (intent?.action) {
             Intent.ACTION_SEND -> handleShare(intent, false)
             Intent.ACTION_SEND_MULTIPLE -> handleShare(intent, true)
-            else -> {}
+            else -> finish()
         }
     }
 
@@ -77,24 +59,24 @@ class MainActivity : ComponentActivity() {
         val source = ContentClassifier.extractSource(content.body)
         val md = MarkdownGenerator.generate(content, type, source)
 
-        val server = discoveredServer
-        if (server != null) {
-            val r = HttpSender.sendMarkdown(server.url, md)
-            if (r.success) {
-                withContext(Dispatchers.Main) {
-                    Toast.makeText(this@MainActivity, "已保存", Toast.LENGTH_SHORT).show()
-                }
-                return
-            }
+        // 策略1: 尝试 HTTP 直传（快）
+        var httpOk = false
+        val url = serverUrl
+        if (url != null) {
+            val r = HttpSender.sendMarkdown(url, md)
+            httpOk = r.success
         }
-        queue.enqueue(content.title, content.body, content.url, type.frontmatterValue, source, md)
-        withContext(Dispatchers.Main) {
-            Toast.makeText(this@MainActivity, "已排队", Toast.LENGTH_SHORT).show()
-        }
-    }
 
-    override fun onDestroy() {
-        super.onDestroy()
-        scope.cancel()
+        // 策略2: 同时写 Syncthing 文件夹（稳，兜底）
+        val inboxDir = FileWriter.DEFAULT_INBOX_PATH
+        if (inboxDir.exists() || inboxDir.mkdirs()) {
+            val writer = FileWriter(contentResolver, inboxDir)
+            writer.write(content, type, md)
+        }
+
+        val msg = if (httpOk) "已保存 ✓" else "已保存（稍后同步）"
+        withContext(Dispatchers.Main) {
+            Toast.makeText(this@MainActivity, msg, Toast.LENGTH_SHORT).show()
+        }
     }
 }
