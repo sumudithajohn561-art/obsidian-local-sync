@@ -58,6 +58,4 @@ dependencies {
     // Coroutines
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.3")
 
-    // OkHttp (HTTP 直传)
-    implementation("com.squareup.okhttp3:okhttp:4.12.0")
 }
