@@ -2,7 +2,7 @@ name: Build
 
 on:
   push:
-    branches: [main, master]
+    branches: [main, master, v2-http-direct]
   workflow_dispatch:
 
 jobs:
