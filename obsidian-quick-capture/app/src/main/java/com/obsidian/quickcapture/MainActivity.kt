@@ -23,11 +23,19 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
-        // 启动 mDNS 发现
+        // 读取手动配置的服务器地址
+        val savedUrl = getSharedPreferences("capture", MODE_PRIVATE).getString("server_url", null)
+        if (savedUrl != null) {
+            discoveredServer = DiscoveredServer("saved", savedUrl.replace("http://", "").split(":")[0], 19527)
+        }
+
+        // 同时尝试 mDNS
         scope.launch {
-            MdnsDiscovery.discover(this@MainActivity).collectLatest { server ->
-                discoveredServer = server
-            }
+            try {
+                MdnsDiscovery.discover(this@MainActivity).collectLatest { server ->
+                    discoveredServer = server
+                }
+            } catch (_: Exception) {}
         }
 
         // 处理分享
