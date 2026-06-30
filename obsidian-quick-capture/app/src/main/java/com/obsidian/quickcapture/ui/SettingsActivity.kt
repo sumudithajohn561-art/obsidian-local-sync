@@ -30,10 +30,14 @@ class SettingsActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
 
         scope.launch {
-            MdnsDiscovery.discover(this@SettingsActivity).collectLatest { server ->
-                connected = true
-                serverState = "已连接"
-                serverHost = server.hostname ?: server.host
+            try {
+                MdnsDiscovery.discover(this@SettingsActivity).collectLatest { server ->
+                    connected = true
+                    serverState = "已连接"
+                    serverHost = server.hostname ?: server.host
+                }
+            } catch (e: Exception) {
+                serverState = "mDNS不支持"
             }
         }
         scope.launch {
