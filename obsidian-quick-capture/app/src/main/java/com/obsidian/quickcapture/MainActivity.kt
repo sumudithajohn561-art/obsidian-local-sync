@@ -18,12 +18,13 @@ import com.obsidian.quickcapture.network.OfflineQueue
 import com.obsidian.quickcapture.ui.QuickCaptureScreen
 import com.obsidian.quickcapture.ui.ServerState
 import kotlinx.coroutines.*
+import kotlinx.coroutines.flow.collectLatest
 import org.json.JSONObject
 
 class MainActivity : ComponentActivity() {
 
     private val scope = CoroutineScope(Dispatchers.Main + SupervisorJob())
-    private var queue by lazy { OfflineQueue(this) }
+    private val queue by lazy { OfflineQueue(this) }
     private var serverState by mutableStateOf<ServerState>(ServerState.Disconnected)
     private var discoveredServer: DiscoveredServer? = null
     private var queueCount by mutableStateOf(0)
@@ -54,7 +55,7 @@ class MainActivity : ComponentActivity() {
             MdnsDiscovery.discover(this@MainActivity).collectLatest { server ->
                 discoveredServer = server
                 serverState = ServerState.Connected(server)
-                flushQueue(server)
+                scope.launch { flushQueue(server) }
             }
         }
         scope.launch {
