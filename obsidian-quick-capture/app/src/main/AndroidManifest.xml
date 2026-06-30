@@ -21,23 +21,24 @@
         android:supportsRtl="true"
         android:theme="@style/Theme.QuickCapture">
 
-        <!-- 设置界面 -->
+        <!-- 设置/首页 (桌面入口) -->
         <activity
             android:name=".ui.SettingsActivity"
-            android:exported="false"
-            android:label="Quick Capture 设置" />
-
-        <!-- 主Activity - 分享接收 + 首页 -->
-        <activity
-            android:name=".MainActivity"
             android:exported="true"
-            android:launchMode="singleTask">
-
-            <!-- 桌面启动器 -->
+            android:label="Quick Capture">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
+        </activity>
+
+        <!-- 分享接收Activity - 透明，秒开 -->
+        <activity
+            android:name=".MainActivity"
+            android:exported="true"
+            android:excludeFromRecents="true"
+            android:taskAffinity=""
+            android:theme="@android:style/Theme.Translucent.NoTitleBar">
 
             <!-- 接收单条分享 -->
             <intent-filter>
