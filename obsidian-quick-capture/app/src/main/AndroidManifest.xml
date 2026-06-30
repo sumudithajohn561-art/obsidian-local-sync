@@ -27,13 +27,12 @@
             android:exported="false"
             android:label="Quick Capture 设置" />
 
-        <!-- 主分享接收Activity - 透明主题，秒开 -->
+        <!-- 主Activity - 分享接收 + 首页 -->
         <activity
             android:name=".MainActivity"
             android:exported="true"
-            android:excludeFromRecents="true"
-            android:taskAffinity=""
-            android:theme="@android:style/Theme.Translucent.NoTitleBar">
+            android:launchMode="singleTask"
+            android:theme="@style/Theme.AppCompat.NoActionBar">
 
             <!-- 桌面启动器 -->
             <intent-filter>
