@@ -1,5 +1,6 @@
 package com.obsidian.quickcapture.ui
 
+import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
 import android.os.Bundle
@@ -13,6 +14,8 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.platform.ClipboardManager
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -26,9 +29,6 @@ import java.io.File
 
 class SettingsActivity : ComponentActivity() {
     private val scope = CoroutineScope(Dispatchers.Main + Job())
-    private var inboxOk by mutableStateOf(false)
-    private var clipText by mutableStateOf("")
-    private var savedMsg by mutableStateOf("")
 
     override fun onDestroy() {
         scope.cancel()
@@ -43,10 +43,13 @@ class SettingsActivity : ComponentActivity() {
             "/storage/emulated/0/Syncthing/obsidian-inbox",
             "/sdcard/Syncthing/Obsidian-Inbox"
         )
-        inboxOk = candidates.any { File(it).exists() }
-        readClipboard()
+        val inboxOk = candidates.any { File(it).exists() }
 
         setContent {
+            var inputText by remember { mutableStateOf("") }
+            var savedMsg by remember { mutableStateOf("") }
+            val clipboard = LocalClipboardManager.current
+
             Surface(modifier = Modifier.fillMaxSize(), color = Color.White) {
                 Column(
                     modifier = Modifier.fillMaxSize().padding(32.dp),
@@ -61,62 +64,65 @@ class SettingsActivity : ComponentActivity() {
                     } else {
                         Text("⚠️ 未找到 Syncthing 文件夹", fontSize = 16.sp, color = Color(0xFFFF9800))
                     }
-                    Spacer(Modifier.height(8.dp))
-                    Text("分享或粘贴 → Syncthing同步 → Obsidian", fontSize = 13.sp, color = Color.Gray)
+                    Spacer(Modifier.height(24.dp))
 
-                    Spacer(Modifier.height(32.dp))
+                    // 输入框
+                    OutlinedTextField(
+                        value = inputText,
+                        onValueChange = { inputText = it },
+                        label = { Text("链接或文本内容") },
+                        modifier = Modifier.fillMaxWidth(),
+                        singleLine = false,
+                        maxLines = 4
+                    )
 
-                    if (clipText.isNotBlank()) {
-                        OutlinedTextField(
-                            value = clipText,
-                            onValueChange = { clipText = it },
-                            label = { Text("剪贴板内容") },
-                            modifier = Modifier.fillMaxWidth(),
-                            singleLine = false,
-                            maxLines = 3
-                        )
-                        Spacer(Modifier.height(12.dp))
-                        Button(
-                            onClick = { scope.launch { saveClipboard(clipText) } },
-                            modifier = Modifier.fillMaxWidth(),
-                            shape = RoundedCornerShape(8.dp),
-                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF4CAF50))
+                    Spacer(Modifier.height(12.dp))
+
+                    // 两个按钮
+                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        // 粘贴按钮
+                        OutlinedButton(
+                            onClick = {
+                                val clip = clipboard.getText()?.text ?: ""
+                                if (clip.isNotBlank()) inputText = clip
+                            },
+                            modifier = Modifier.weight(1f),
+                            shape = RoundedCornerShape(8.dp)
                         ) {
-                            Text(if (clipText.startsWith("http")) "保存链接" else "保存内容", color = Color.White)
+                            Text("📋 粘贴", color = Color(0xFF2196F3))
                         }
-                        Spacer(Modifier.height(8.dp))
-                    } else {
-                        Text("复制链接后打开App，自动识别", fontSize = 13.sp, color = Color.LightGray)
+
+                        // 保存按钮
+                        Button(
+                            onClick = {
+                                if (inputText.isNotBlank()) {
+                                    scope.launch {
+                                        val result = saveAndReturn(inputText)
+                                        savedMsg = if (result) "✅ 已保存" else "❌ 保存失败"
+                                        if (result) inputText = ""
+                                    }
+                                }
+                            },
+                            modifier = Modifier.weight(1f),
+                            shape = RoundedCornerShape(8.dp),
+                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF4CAF50)),
+                            enabled = inputText.isNotBlank()
+                        ) {
+                            Text("保存", color = Color.White)
+                        }
                     }
 
+                    // 状态消息
                     if (savedMsg.isNotEmpty()) {
                         Spacer(Modifier.height(16.dp))
-                        Text(savedMsg, fontSize = 14.sp, color = Color(0xFF4CAF50))
+                        Text(savedMsg, fontSize = 14.sp, color = if (savedMsg.startsWith("✅")) Color(0xFF4CAF50) else Color.Red)
                     }
                 }
             }
         }
     }
 
-    override fun onResume() {
-        super.onResume()
-        readClipboard()
-    }
-
-    private fun readClipboard() {
-        try {
-            val cm = getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager ?: return
-            try {
-                val text = cm.primaryClip?.getItemAt(0)?.text?.toString() ?: ""
-                if (text.isNotBlank()) clipText = text
-            } catch (e: SecurityException) {
-                // Android 10+ 剪贴板权限限制，非致命
-                android.util.Log.w("QuickCapture", "无法读取剪贴板: ${e.message}")
-            }
-        } catch (_: Exception) {}
-    }
-
-    private suspend fun saveClipboard(text: String) = withContext(Dispatchers.IO) {
+    private suspend fun saveAndReturn(text: String): Boolean = withContext(Dispatchers.IO) {
         try {
             val content = SharedContent(
                 title = if (text.startsWith("http")) text.take(80) else text.take(50),
@@ -129,25 +135,15 @@ class SettingsActivity : ComponentActivity() {
             val type = ContentClassifier.classify(content.mimeType, content.body)
             val source = ContentClassifier.extractSource(content.body)
             val md = MarkdownGenerator.generate(content, type, source)
-
             val inboxDir = findInboxDir()
             if (inboxDir != null) {
                 FileWriter(contentResolver, inboxDir).write(content, type, md)
                 withContext(Dispatchers.Main) {
-                    savedMsg = "✅ 已保存"
-                    clipText = ""
                     Toast.makeText(this@SettingsActivity, "已保存", Toast.LENGTH_SHORT).show()
                 }
-            } else {
-                withContext(Dispatchers.Main) {
-                    savedMsg = "保存失败：找不到收件箱目录"
-                }
-            }
-        } catch (e: Exception) {
-            withContext(Dispatchers.Main) {
-                savedMsg = "保存失败: ${e.message}"
-            }
-        }
+                true
+            } else false
+        } catch (e: Exception) { false }
     }
 
     private fun findInboxDir(): File? {
