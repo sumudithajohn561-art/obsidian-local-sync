@@ -2,7 +2,12 @@ package com.obsidian.quickcapture.ui
 
 import android.content.ClipboardManager
 import android.content.Context
+import android.content.Intent
+import android.net.Uri
+import android.os.Build
 import android.os.Bundle
+import android.os.Environment
+import android.provider.Settings
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -32,15 +37,41 @@ class SettingsActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        if (!hasStoragePermission()) {
+            requestStoragePermission()
+        }
         setContent { App() }
+    }
+
+    private fun hasStoragePermission(): Boolean {
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            Environment.isExternalStorageManager()
+        } else true
+    }
+
+    private fun requestStoragePermission() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            startActivity(Intent(Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION).apply {
+                data = Uri.parse("package:$packageName")
+            })
+        }
     }
 
     @OptIn(ExperimentalMaterial3Api::class)
     @Composable
     fun App() {
+        val hasPerm = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) Environment.isExternalStorageManager() else true
         val ready = remember { CaptureRepository.isReady() }
         var input by remember { mutableStateOf("") }
-        var status by remember { mutableStateOf(if (ready) "收件箱就绪" else "❌ 收件箱未找到") }
+        var status by remember {
+            mutableStateOf(
+                when {
+                    !hasPerm -> "⚠️ 需要存储权限"
+                    !ready -> "❌ 收件箱未找到"
+                    else -> "收件箱就绪"
+                }
+            )
+        }
         var files by remember { mutableStateOf(CaptureRepository.listFiles()) }
 
         fun refresh() { files = CaptureRepository.listFiles() }
@@ -90,6 +121,16 @@ class SettingsActivity : ComponentActivity() {
                         enabled = input.isNotBlank(),
                         colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF4CAF50))
                     ) { Text("保存", color = Color.White) }
+                }
+
+                if (!hasPerm) {
+                    Spacer(Modifier.height(8.dp))
+                    Button(
+                        onClick = { requestStoragePermission() },
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(8.dp),
+                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFFF9800))
+                    ) { Text("🔓 授予存储权限", color = Color.White) }
                 }
 
                 Spacer(Modifier.height(16.dp))
