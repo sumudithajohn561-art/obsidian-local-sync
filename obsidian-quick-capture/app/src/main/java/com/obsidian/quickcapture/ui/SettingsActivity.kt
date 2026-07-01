@@ -26,6 +26,7 @@ import java.io.File
 
 class SettingsActivity : ComponentActivity() {
     private val scope = CoroutineScope(Dispatchers.Main + Job())
+    private var clipText by mutableStateOf("")
     override fun onDestroy() { scope.cancel(); super.onDestroy() }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -37,23 +38,21 @@ class SettingsActivity : ComponentActivity() {
             "/sdcard/Syncthing/Obsidian-Inbox"
         )
         val inboxOk = candidates.any { File(it).exists() }
-        val clip = readClipboard()
+
+        clipText = readClipboard()
+        if (clipText.isNotBlank() && inboxOk) {
+            scope.launch { runSave(clipText); finish() }
+        }
 
         setContent {
-            var status by remember { mutableStateOf("idle") }
+            var status by remember { mutableStateOf(if (clipText.isNotBlank()) "saving" else if (!inboxOk) "no_inbox" else "idle") }
 
-            // 自动保存
-            LaunchedEffect(clip) {
-                if (clip.isNotBlank() && inboxOk) {
+            LaunchedEffect(clipText) {
+                if (clipText.isNotBlank() && inboxOk) {
                     status = "saving"
-                    val ok = runSave(clip)
+                    val ok = runSave(clipText)
                     status = if (ok) "done" else "error"
-                    if (ok) {
-                        delay(1000)
-                        finish()  // 保存成功后自动关闭
-                    }
-                } else if (!inboxOk) {
-                    status = "no_inbox"
+                    if (ok) delay(1000)
                 }
             }
 
@@ -110,6 +109,17 @@ class SettingsActivity : ComponentActivity() {
                         Text("安装 Syncthing 并设置同步文件夹", fontSize = 14.sp, color = Color(0xFFFF9800))
                     }
                 }
+            }
+        }
+    }
+
+    override fun onResume() {
+        super.onResume()
+        val text = readClipboard()
+        if (text.isNotBlank() && text != clipText) {
+            clipText = text
+            scope.launch {
+                if (runSave(text)) delay(1000)
             }
         }
     }
