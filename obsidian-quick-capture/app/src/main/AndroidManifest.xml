@@ -10,6 +10,10 @@
     <uses-permission android:name="android.permission.MANAGE_EXTERNAL_STORAGE"
         tools:ignore="ScopedStorage" />
 
+    <!-- 前台服务权限 -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+
     <!-- 读取分享内容的权限 -->
     <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE"
         android:maxSdkVersion="32" />
@@ -69,6 +73,17 @@
                 <data android:mimeType="*/*" />
             </intent-filter>
         </activity>
+
+        <!-- 剪贴板监听服务 -->
+        <service
+            android:name=".ClipboardService"
+            android:exported="false"
+            android:foregroundServiceType="dataSync" />
+
+        <!-- 通知操作接收器 -->
+        <receiver
+            android:name=".SaveReceiver"
+            android:exported="false" />
 
         <!-- FileProvider: 允许Syncthing读取App写入的文件 -->
         <provider
