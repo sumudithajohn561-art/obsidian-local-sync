@@ -6,12 +6,15 @@ import android.os.Bundle
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.compose.animation.*
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -27,10 +30,7 @@ import java.io.File
 class SettingsActivity : ComponentActivity() {
     private val scope = CoroutineScope(Dispatchers.Main + Job())
 
-    override fun onDestroy() {
-        scope.cancel()
-        super.onDestroy()
-    }
+    override fun onDestroy() { scope.cancel(); super.onDestroy() }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -42,10 +42,21 @@ class SettingsActivity : ComponentActivity() {
         )
         val inboxOk = candidates.any { File(it).exists() }
 
+        // 自动读剪贴板
+        val clip = readClipboardNow()
+
         setContent {
-            var inputText by remember { mutableStateOf("") }
-            var savedMsg by remember { mutableStateOf("") }
-            val clipboard = getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
+            var status by remember { mutableStateOf(if (clip.isNotBlank()) "saving" else "ready") }
+            var savedCount by remember { mutableStateOf(0) }
+
+            // 有剪贴板内容 → 自动保存
+            LaunchedEffect(clip) {
+                if (clip.isNotBlank()) {
+                    val ok = saveOne(clip)
+                    status = if (ok) "saved" else "error"
+                    if (ok) savedCount++
+                }
+            }
 
             Surface(modifier = Modifier.fillMaxSize(), color = Color.White) {
                 Column(
@@ -53,93 +64,97 @@ class SettingsActivity : ComponentActivity() {
                     horizontalAlignment = Alignment.CenterHorizontally,
                     verticalArrangement = Arrangement.Center
                 ) {
-                    Text("Quick Capture", fontSize = 24.sp, fontWeight = FontWeight.Bold, color = Color(0xFF1A1A2E))
-                    Spacer(Modifier.height(16.dp))
-
-                    if (inboxOk) {
-                        Text("✅ 收件箱就绪", fontSize = 16.sp, color = Color(0xFF4CAF50))
-                    } else {
-                        Text("⚠️ 未找到 Syncthing 文件夹", fontSize = 16.sp, color = Color(0xFFFF9800))
+                    // 状态圈 + 图标
+                    Box(
+                        modifier = Modifier
+                            .size(80.dp)
+                            .clip(CircleShape)
+                            .background(
+                                when (status) {
+                                    "saved" -> Color(0xFF4CAF50)
+                                    "saving" -> Color(0xFF2196F3)
+                                    "error" -> Color(0xFFFF5722)
+                                    else -> Color(0xFFE0E0E0)
+                                }
+                            ),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text(
+                            when (status) {
+                                "saved" -> "✓"
+                                "saving" -> "→"
+                                "error" -> "✗"
+                                else -> "📥"
+                            },
+                            fontSize = 32.sp,
+                            color = Color.White
+                        )
                     }
+
                     Spacer(Modifier.height(24.dp))
 
-                    // 输入框
-                    OutlinedTextField(
-                        value = inputText,
-                        onValueChange = { inputText = it },
-                        label = { Text("链接或文本内容") },
-                        modifier = Modifier.fillMaxWidth(),
-                        singleLine = false,
-                        maxLines = 4
+                    Text(
+                        when (status) {
+                            "saved" -> "已保存"
+                            "saving" -> "正在保存..."
+                            "error" -> "保存失败"
+                            else -> if (inboxOk) "收件箱就绪" else "收件箱未找到"
+                        },
+                        fontSize = 18.sp,
+                        fontWeight = FontWeight.Medium,
+                        color = Color(0xFF1A1A2E)
                     )
 
-                    Spacer(Modifier.height(12.dp))
-
-                    // 两个按钮
-                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        // 粘贴按钮
-                        OutlinedButton(
-                            onClick = {
-                                val clip = clipboard?.primaryClip?.getItemAt(0)?.text?.toString() ?: ""
-                                if (clip.isNotBlank()) inputText = clip
-                            },
-                            modifier = Modifier.weight(1f),
-                            shape = RoundedCornerShape(8.dp)
-                        ) {
-                            Text("📋 粘贴", color = Color(0xFF2196F3))
-                        }
-
-                        // 保存按钮
-                        Button(
-                            onClick = {
-                                if (inputText.isNotBlank()) {
-                                    scope.launch {
-                                        val result = saveAndReturn(inputText)
-                                        savedMsg = if (result) "✅ 已保存" else "❌ 保存失败"
-                                        if (result) inputText = ""
-                                    }
-                                }
-                            },
-                            modifier = Modifier.weight(1f),
-                            shape = RoundedCornerShape(8.dp),
-                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF4CAF50)),
-                            enabled = inputText.isNotBlank()
-                        ) {
-                            Text("保存", color = Color.White)
-                        }
+                    if (status == "ready" && inboxOk) {
+                        Spacer(Modifier.height(8.dp))
+                        Text("复制链接后打开App，自动保存", fontSize = 13.sp, color = Color.Gray)
                     }
 
-                    // 状态消息
-                    if (savedMsg.isNotEmpty()) {
-                        Spacer(Modifier.height(16.dp))
-                        Text(savedMsg, fontSize = 14.sp, color = if (savedMsg.startsWith("✅")) Color(0xFF4CAF50) else Color.Red)
+                    if (!inboxOk) {
+                        Spacer(Modifier.height(8.dp))
+                        Text("请确保 Syncthing 已安装并同步", fontSize = 13.sp, color = Color(0xFFFF9800))
+                    }
+
+                    if (savedCount > 0) {
+                        Spacer(Modifier.height(32.dp))
+                        Text("已保存 $savedCount 项", fontSize = 13.sp, color = Color.LightGray)
+                    }
+
+                    // 短暂状态后重置
+                    if (status == "saved" || status == "error") {
+                        LaunchedEffect(status) {
+                            delay(2000)
+                            status = "ready"
+                        }
                     }
                 }
             }
         }
     }
 
-    private suspend fun saveAndReturn(text: String): Boolean = withContext(Dispatchers.IO) {
+    private fun readClipboardNow(): String {
+        return try {
+            val cm = getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager ?: return ""
+            cm.primaryClip?.getItemAt(0)?.text?.toString() ?: ""
+        } catch (_: Exception) { "" }
+    }
+
+    private suspend fun saveOne(text: String): Boolean = withContext(Dispatchers.IO) {
         try {
             val content = SharedContent(
                 title = if (text.startsWith("http")) text.take(80) else text.take(50),
-                body = text,
-                url = if (text.startsWith("http")) text else null,
-                mimeType = "text/plain",
-                attachmentUri = null,
-                attachmentFileName = null
+                body = text, url = if (text.startsWith("http")) text else null,
+                mimeType = "text/plain", attachmentUri = null, attachmentFileName = null
             )
             val type = ContentClassifier.classify(content.mimeType, content.body)
             val source = ContentClassifier.extractSource(content.body)
             val md = MarkdownGenerator.generate(content, type, source)
-            val inboxDir = findInboxDir()
-            if (inboxDir != null) {
-                FileWriter(contentResolver, inboxDir).write(content, type, md)
-                withContext(Dispatchers.Main) {
-                    Toast.makeText(this@SettingsActivity, "已保存", Toast.LENGTH_SHORT).show()
-                }
-                true
-            } else false
+            val inboxDir = findInboxDir() ?: return@withContext false
+            FileWriter(contentResolver, inboxDir).write(content, type, md)
+            withContext(Dispatchers.Main) {
+                Toast.makeText(this@SettingsActivity, "已保存", Toast.LENGTH_SHORT).show()
+            }
+            true
         } catch (e: Exception) { false }
     }
 
