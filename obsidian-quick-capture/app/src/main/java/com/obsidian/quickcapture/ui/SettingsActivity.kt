@@ -1,6 +1,5 @@
 package com.obsidian.quickcapture.ui
 
-import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
 import android.os.Bundle
@@ -14,8 +13,6 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.platform.LocalClipboardManager
-import androidx.compose.ui.platform.ClipboardManager
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -48,7 +45,7 @@ class SettingsActivity : ComponentActivity() {
         setContent {
             var inputText by remember { mutableStateOf("") }
             var savedMsg by remember { mutableStateOf("") }
-            val clipboard = LocalClipboardManager.current
+            val clipboard = getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
 
             Surface(modifier = Modifier.fillMaxSize(), color = Color.White) {
                 Column(
@@ -83,7 +80,7 @@ class SettingsActivity : ComponentActivity() {
                         // 粘贴按钮
                         OutlinedButton(
                             onClick = {
-                                val clip = clipboard.getText()?.text ?: ""
+                                val clip = clipboard?.primaryClip?.getItemAt(0)?.text?.toString() ?: ""
                                 if (clip.isNotBlank()) inputText = clip
                             },
                             modifier = Modifier.weight(1f),
