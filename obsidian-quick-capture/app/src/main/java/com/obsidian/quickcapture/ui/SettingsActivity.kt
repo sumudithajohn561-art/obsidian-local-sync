@@ -25,6 +25,7 @@ import com.obsidian.quickcapture.content.*
 import com.obsidian.quickcapture.markdown.*
 import com.obsidian.quickcapture.storage.FileWriter
 import kotlinx.coroutines.*
+import java.io.File
 
 class SettingsActivity : ComponentActivity() {
     private val scope = CoroutineScope(Dispatchers.Main + Job())
