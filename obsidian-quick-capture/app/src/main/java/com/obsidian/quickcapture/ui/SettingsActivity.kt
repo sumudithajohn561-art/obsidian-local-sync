@@ -152,7 +152,6 @@ class SettingsActivity : ComponentActivity() {
             val type = ContentClassifier.classify(content.mimeType, content.body)
             val source = ContentClassifier.extractSource(content.body)
             val md = MarkdownGenerator.generate(content, type, source)
-            val inboxDir = findInboxDir() ?: return@withContext false
             val dir = InboxDir.find() ?: return@withContext false
             FileWriter(contentResolver, dir).write(content, type, md)
             withContext(Dispatchers.Main) {
