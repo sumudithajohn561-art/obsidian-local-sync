@@ -26,13 +26,14 @@ import java.io.File
 
 class SettingsActivity : ComponentActivity() {
     private val scope = CoroutineScope(Dispatchers.Main + Job())
+    private var inboxOk by mutableStateOf(false)
+    private var clipText by mutableStateOf("")
+    private var savedMsg by mutableStateOf("")
 
     override fun onDestroy() {
         scope.cancel()
         super.onDestroy()
     }
-    private var inboxOk by mutableStateOf(false)
-    private var savedMsg by mutableStateOf("")
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -43,10 +44,7 @@ class SettingsActivity : ComponentActivity() {
             "/sdcard/Syncthing/Obsidian-Inbox"
         )
         inboxOk = candidates.any { File(it).exists() }
-
-        // 自动检测剪贴板
-        val clipboard = getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager ?: return
-        val clipText = clipboard.primaryClip?.getItemAt(0)?.text?.toString() ?: ""
+        readClipboard()
 
         setContent {
             Surface(modifier = Modifier.fillMaxSize(), color = Color.White) {
@@ -64,18 +62,17 @@ class SettingsActivity : ComponentActivity() {
                         Text("⚠️ 未找到 Syncthing 文件夹", fontSize = 16.sp, color = Color(0xFFFF9800))
                     }
                     Spacer(Modifier.height(8.dp))
-                    Text("分享内容到App，Syncthing自动同步", fontSize = 13.sp, color = Color.Gray)
+                    Text("分享或粘贴 → Syncthing同步 → Obsidian", fontSize = 13.sp, color = Color.Gray)
 
                     Spacer(Modifier.height(32.dp))
 
-                    // 粘贴保存区
                     if (clipText.isNotBlank()) {
                         OutlinedTextField(
                             value = clipText,
-                            onValueChange = {},
+                            onValueChange = { clipText = it },
                             label = { Text("剪贴板内容") },
                             modifier = Modifier.fillMaxWidth(),
-                            readOnly = true,
+                            singleLine = false,
                             maxLines = 3
                         )
                         Spacer(Modifier.height(12.dp))
@@ -101,10 +98,23 @@ class SettingsActivity : ComponentActivity() {
         }
     }
 
+    override fun onResume() {
+        super.onResume()
+        readClipboard()
+    }
+
+    private fun readClipboard() {
+        try {
+            val cm = getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager ?: return
+            val text = cm.primaryClip?.getItemAt(0)?.text?.toString() ?: ""
+            if (text.isNotBlank()) clipText = text
+        } catch (_: Exception) {}
+    }
+
     private suspend fun saveClipboard(text: String) = withContext(Dispatchers.IO) {
         try {
             val content = SharedContent(
-                title = if (text.startsWith("http")) "手动保存 ${text.take(40)}" else text.take(50),
+                title = if (text.startsWith("http")) text.take(80) else text.take(50),
                 body = text,
                 url = if (text.startsWith("http")) text else null,
                 mimeType = "text/plain",
@@ -120,7 +130,12 @@ class SettingsActivity : ComponentActivity() {
                 FileWriter(contentResolver, inboxDir).write(content, type, md)
                 withContext(Dispatchers.Main) {
                     savedMsg = "✅ 已保存"
+                    clipText = ""
                     Toast.makeText(this@SettingsActivity, "已保存", Toast.LENGTH_SHORT).show()
+                }
+            } else {
+                withContext(Dispatchers.Main) {
+                    savedMsg = "保存失败：找不到收件箱目录"
                 }
             }
         } catch (e: Exception) {
