@@ -11,13 +11,7 @@ import java.io.File
 /** 唯一的文件操作入口——所有读写都走这里 */
 object CaptureRepository {
 
-    private fun inboxDir(): File? {
-        for (p in InboxDir.paths) {
-            val d = File(p)
-            if (d.exists() || d.mkdirs()) return d
-        }
-        return null
-    }
+    private fun inboxDir(): File? = InboxDir.find()
 
     /** 保存一条内容，返回保存的文件名 */
     fun save(content: SharedContent, resolver: ContentResolver): String? {
