@@ -8,12 +8,16 @@ import com.obsidian.quickcapture.content.ContentClassifier
 import com.obsidian.quickcapture.content.ContentExtractor
 import com.obsidian.quickcapture.markdown.MarkdownGenerator
 import com.obsidian.quickcapture.storage.FileWriter
-import com.obsidian.quickcapture.storage.AttachmentHandler
 import kotlinx.coroutines.*
 import java.io.File
 
 class MainActivity : ComponentActivity() {
-    private val scope = CoroutineScope(Dispatchers.Main + SupervisorJob())
+    private val scope = CoroutineScope(Dispatchers.Main + Job())
+
+    override fun onDestroy() {
+        scope.cancel()
+        super.onDestroy()
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -83,6 +87,7 @@ class MainActivity : ComponentActivity() {
                 return dir
             }
         }
-        return filesDir.resolve("inbox").also { it.mkdirs() } // 兜底
+        val fallback = filesDir.resolve("inbox")
+        return if (fallback.mkdirs()) fallback else null
     }
 }

@@ -25,7 +25,12 @@ import kotlinx.coroutines.*
 import java.io.File
 
 class SettingsActivity : ComponentActivity() {
-    private val scope = CoroutineScope(Dispatchers.Main + SupervisorJob())
+    private val scope = CoroutineScope(Dispatchers.Main + Job())
+
+    override fun onDestroy() {
+        scope.cancel()
+        super.onDestroy()
+    }
     private var inboxOk by mutableStateOf(false)
     private var savedMsg by mutableStateOf("")
 
@@ -40,7 +45,7 @@ class SettingsActivity : ComponentActivity() {
         inboxOk = candidates.any { File(it).exists() }
 
         // 自动检测剪贴板
-        val clipboard = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+        val clipboard = getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager ?: return
         val clipText = clipboard.primaryClip?.getItemAt(0)?.text?.toString() ?: ""
 
         setContent {
@@ -134,6 +139,7 @@ class SettingsActivity : ComponentActivity() {
         for (dir in candidates) {
             if ((dir.exists() && dir.isDirectory) || dir.mkdirs()) return dir
         }
-        return filesDir.resolve("inbox").also { it.mkdirs() }
+        val fallback = filesDir.resolve("inbox")
+        return if (fallback.mkdirs()) fallback else null
     }
 }
