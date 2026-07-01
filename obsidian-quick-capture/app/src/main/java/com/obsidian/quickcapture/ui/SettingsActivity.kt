@@ -20,6 +20,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.obsidian.quickcapture.CaptureRepository
+import com.obsidian.quickcapture.InboxDir
 import kotlinx.coroutines.*
 import java.io.File
 import java.text.SimpleDateFormat
@@ -76,7 +77,7 @@ class SettingsActivity : ComponentActivity() {
                                             status = "✅ 已保存: $name"
                                             Toast.makeText(this@SettingsActivity, "已保存", Toast.LENGTH_SHORT).show()
                                             refresh()
-                                        } else status = "❌ 保存失败"
+                                        } else status = "❌ 保存失败\n${InboxDir.diagnostic()}"
                                     }
                                 } catch (e: Exception) {
                                     withContext(Dispatchers.Main) {
