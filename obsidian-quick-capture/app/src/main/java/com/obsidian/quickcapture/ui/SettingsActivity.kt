@@ -106,8 +106,13 @@ class SettingsActivity : ComponentActivity() {
     private fun readClipboard() {
         try {
             val cm = getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager ?: return
-            val text = cm.primaryClip?.getItemAt(0)?.text?.toString() ?: ""
-            if (text.isNotBlank()) clipText = text
+            try {
+                val text = cm.primaryClip?.getItemAt(0)?.text?.toString() ?: ""
+                if (text.isNotBlank()) clipText = text
+            } catch (e: SecurityException) {
+                // Android 10+ 剪贴板权限限制，非致命
+                android.util.Log.w("QuickCapture", "无法读取剪贴板: ${e.message}")
+            }
         } catch (_: Exception) {}
     }
 
