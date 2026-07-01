@@ -22,7 +22,7 @@ class MainActivity : ComponentActivity() {
                 val fileName = CaptureRepository.save(content, contentResolver)
                 withContext(Dispatchers.Main) {
                     if (fileName != null) {
-                        Toast.makeText(this@MainActivity, "✅ ${content.title.take(20)}", Toast.LENGTH_SHORT).show()
+                        Toast.makeText(this@MainActivity, "✅ ${content.title?.take(20) ?: "已保存"}", Toast.LENGTH_SHORT).show()
                     } else {
                         Toast.makeText(this@MainActivity, "❌ 保存失败(收件箱)", Toast.LENGTH_SHORT).show()
                     }

@@ -68,14 +68,20 @@ class SettingsActivity : ComponentActivity() {
                     Button(onClick = {
                         if (input.isNotBlank()) {
                             scope.launch(Dispatchers.IO) {
-                                val name = CaptureRepository.saveText(input, contentResolver)
-                                withContext(Dispatchers.Main) {
-                                    if (name != null) {
-                                        input = ""
-                                        status = "✅ 已保存: $name"
-                                        Toast.makeText(this@SettingsActivity, "已保存", Toast.LENGTH_SHORT).show()
-                                        refresh()
-                                    } else status = "❌ 保存失败"
+                                try {
+                                    val name = CaptureRepository.saveText(input, contentResolver)
+                                    withContext(Dispatchers.Main) {
+                                        if (name != null) {
+                                            input = ""
+                                            status = "✅ 已保存: $name"
+                                            Toast.makeText(this@SettingsActivity, "已保存", Toast.LENGTH_SHORT).show()
+                                            refresh()
+                                        } else status = "❌ 保存失败"
+                                    }
+                                } catch (e: Exception) {
+                                    withContext(Dispatchers.Main) {
+                                        status = "❌ ${e.message}"
+                                    }
                                 }
                             }
                         }
