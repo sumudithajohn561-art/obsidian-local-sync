@@ -20,11 +20,11 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.obsidian.quickcapture.InboxDir
 import com.obsidian.quickcapture.content.*
 import com.obsidian.quickcapture.markdown.*
 import com.obsidian.quickcapture.storage.FileWriter
 import kotlinx.coroutines.*
-import java.io.File
 
 class SettingsActivity : ComponentActivity() {
     private val scope = CoroutineScope(Dispatchers.Main + Job())
@@ -38,20 +38,15 @@ class SettingsActivity : ComponentActivity() {
     @OptIn(ExperimentalMaterial3Api::class)
     @Composable
     fun MainUI() {
-        val inboxOk = remember {
-            listOf(
-                "/storage/emulated/0/Syncthing/Obsidian-Inbox",
-                "/storage/emulated/0/Syncthing/obsidian-inbox",
-                "/sdcard/Syncthing/Obsidian-Inbox"
-            ).any { File(it).exists() }
-        }
+        val inboxDir = remember { InboxDir.find() }
+        val inboxOk = inboxDir != null
         var log by remember { mutableStateOf(if (inboxOk) "收件箱就绪" else "未找到收件箱") }
         var input by remember { mutableStateOf("") }
         var savedFiles by remember { mutableStateOf(listOf<File>()) }
 
         // 刷新已保存的文件列表
         LaunchedEffect(log) {
-            savedFiles = findInboxDir()?.listFiles()
+            savedFiles = inboxDir?.listFiles()
                 ?.filter { it.extension == "md" }
                 ?.sortedByDescending { it.lastModified() }
                 ?.take(20) ?: emptyList()
@@ -157,20 +152,12 @@ class SettingsActivity : ComponentActivity() {
             val source = ContentClassifier.extractSource(content.body)
             val md = MarkdownGenerator.generate(content, type, source)
             val inboxDir = findInboxDir() ?: return@withContext false
-            FileWriter(contentResolver, inboxDir).write(content, type, md)
+            val dir = InboxDir.find() ?: return@withContext false
+            FileWriter(contentResolver, dir).write(content, type, md)
             withContext(Dispatchers.Main) {
                 Toast.makeText(this@SettingsActivity, "已保存 ✓", Toast.LENGTH_SHORT).show()
             }
             true
         } catch (e: Exception) { false }
-    }
-
-    private fun findInboxDir(): File? {
-        for (path in listOf(
-            "/storage/emulated/0/Syncthing/Obsidian-Inbox",
-            "/storage/emulated/0/Syncthing/obsidian-inbox",
-            "/sdcard/Syncthing/Obsidian-Inbox"
-        )) { val d = File(path); if (d.exists() || d.mkdirs()) return d }
-        return null
     }
 }

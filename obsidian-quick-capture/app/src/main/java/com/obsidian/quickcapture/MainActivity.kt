@@ -9,7 +9,6 @@ import com.obsidian.quickcapture.content.ContentExtractor
 import com.obsidian.quickcapture.markdown.MarkdownGenerator
 import com.obsidian.quickcapture.storage.FileWriter
 import kotlinx.coroutines.*
-import java.io.File
 
 class MainActivity : ComponentActivity() {
     private val scope = CoroutineScope(Dispatchers.Main + Job())
@@ -61,32 +60,13 @@ class MainActivity : ComponentActivity() {
             val type = ContentClassifier.classify(content.mimeType, content.body)
             val source = ContentClassifier.extractSource(content.body)
             val md = MarkdownGenerator.generate(content, type, source)
-
-            // 找 Syncthing 文件夹
-            val inboxDir = findInboxDir() ?: return@withContext false
-            val writer = FileWriter(contentResolver, inboxDir)
-            writer.write(content, type, md)
+            val inboxDir = InboxDir.find() ?: return@withContext false
+            FileWriter(contentResolver, inboxDir).write(content, type, md)
+            android.util.Log.i("QuickCapture", "Saved: ${content.title} to ${inboxDir.absolutePath}")
             true
         } catch (e: Exception) {
-            e.printStackTrace()
+            android.util.Log.e("QuickCapture", "Save error", e)
             false
         }
-    }
-
-    private fun findInboxDir(): File? {
-        // 按优先级尝试常见路径
-        val candidates = listOf(
-            File("/storage/emulated/0/Syncthing/Obsidian-Inbox"),
-            File("/storage/emulated/0/Syncthing/obsidian-inbox"),
-            File("/sdcard/Syncthing/Obsidian-Inbox"),
-            File("/storage/emulated/0/Obsidian-Inbox"),
-        )
-        for (dir in candidates) {
-            if ((dir.exists() && dir.isDirectory) || dir.mkdirs()) {
-                return dir
-            }
-        }
-        val fallback = filesDir.resolve("inbox")
-        return if (fallback.mkdirs()) fallback else null
     }
 }
