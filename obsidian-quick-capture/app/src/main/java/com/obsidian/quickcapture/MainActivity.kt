@@ -33,26 +33,25 @@ class MainActivity : ComponentActivity() {
         if (intent == null) { finish(); return }
         scope.launch {
             try {
-                var count = 0
-                if (multiple) {
-                    intent.clipData?.let { cd ->
-                        for (i in 0 until cd.itemCount) {
-                            val item = Intent().apply {
-                                action = Intent.ACTION_SEND; type = intent.type
-                                putExtra(Intent.EXTRA_TEXT, cd.getItemAt(i).text)
-                                putExtra(Intent.EXTRA_STREAM, cd.getItemAt(i).uri)
-                            }
-                            if (save(ContentExtractor.extract(item))) count++
-                        }
+                val content = ContentExtractor.extract(intent)
+                withContext(Dispatchers.Main) {
+                    Toast.makeText(this@MainActivity, "接收: ${content.title.take(30)}...", Toast.LENGTH_SHORT).show()
+                }
+                if (save(content)) {
+                    withContext(Dispatchers.Main) {
+                        Toast.makeText(this@MainActivity, "✅ 已保存: ${content.title.take(20)}", Toast.LENGTH_SHORT).show()
                     }
                 } else {
-                    if (save(ContentExtractor.extract(intent))) count++
+                    withContext(Dispatchers.Main) {
+                        Toast.makeText(this@MainActivity, "❌ 保存失败", Toast.LENGTH_LONG).show()
+                    }
                 }
-                val msg = if (count > 0) "已保存 ${if (multiple) count.toString()+"项" else ""}" else "保存失败"
-                withContext(Dispatchers.Main) { Toast.makeText(this@MainActivity, msg, Toast.LENGTH_SHORT).show() }
             } catch (e: Exception) {
-                withContext(Dispatchers.Main) { Toast.makeText(this@MainActivity, "失败", Toast.LENGTH_SHORT).show() }
+                withContext(Dispatchers.Main) {
+                    Toast.makeText(this@MainActivity, "❌ ${e.message}", Toast.LENGTH_LONG).show()
+                }
             }
+            delay(500)
             finish()
         }
     }

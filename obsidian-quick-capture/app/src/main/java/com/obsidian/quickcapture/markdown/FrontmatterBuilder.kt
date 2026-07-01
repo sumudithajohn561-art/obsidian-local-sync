@@ -24,7 +24,7 @@ import java.time.format.DateTimeFormatter
  */
 object FrontmatterBuilder {
 
-    private val dateFormatter = DateTimeFormatter.ofPattern("yyyy-MM-dd-HHmmss")
+    private val dateFormatter = DateTimeFormatter.ofPattern("yyyy-MM-dd-HHmmssSSS")
 
     /**
      * 构建完整的 frontmatter YAML 块
