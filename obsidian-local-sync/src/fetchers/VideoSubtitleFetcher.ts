@@ -40,8 +40,16 @@ export async function fetchVideoInfo(url: string, platform: string): Promise<Vid
  */
 async function fetchBilibiliInfo(url: string): Promise<VideoInfo | null> {
     try {
+        // 如果是短链接，先解析重定向
+        let resolvedUrl = url;
+        if (url.includes("b23.tv")) {
+            try {
+                const resp = await fetch(url, { method: "HEAD", redirect: "manual" });
+                resolvedUrl = resp.headers.get("location") || url;
+            } catch (_) { /* 保持原URL */ }
+        }
         // 从URL提取 BV号
-        const bvMatch = url.match(/BV([a-zA-Z0-9]+)/);
+        const bvMatch = resolvedUrl.match(/BV([a-zA-Z0-9]+)/);
         if (!bvMatch) return null;
         const bvid = `BV${bvMatch[1]}`;
 
