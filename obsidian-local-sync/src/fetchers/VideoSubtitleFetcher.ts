@@ -44,8 +44,8 @@ async function fetchBilibiliInfo(url: string): Promise<VideoInfo | null> {
         let resolvedUrl = url;
         if (url.includes("b23.tv")) {
             try {
-                const resp = await fetch(url, { method: "HEAD", redirect: "follow" });
-                resolvedUrl = resp.url;  // 跟随重定向后的最终URL（含BV号）
+                const resp = await fetch(url, { method: "GET", redirect: "follow" });
+                resolvedUrl = resp.url;
             } catch (_) { /* 保持原URL */ }
         }
         // 从URL提取 BV号
