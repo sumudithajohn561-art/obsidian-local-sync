@@ -26,7 +26,7 @@ export function isWechatArticle(url: string): boolean {
  * 判断URL是否为视频平台链接
  */
 export function isVideoUrl(url: string): { platform: string } | null {
-    if (url.includes("bilibili.com/video/")) return { platform: "bilibili" };
+    if (url.includes("bilibili.com") || url.includes("b23.tv")) return { platform: "bilibili" };
     if (url.includes("youtube.com/watch") || url.includes("youtu.be/")) return { platform: "youtube" };
     if (url.includes("douyin.com/video/")) return { platform: "douyin" };
     return null;
