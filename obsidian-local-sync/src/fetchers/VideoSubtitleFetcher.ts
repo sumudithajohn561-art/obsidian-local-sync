@@ -40,12 +40,12 @@ export async function fetchVideoInfo(url: string, platform: string): Promise<Vid
  */
 async function fetchBilibiliInfo(url: string): Promise<VideoInfo | null> {
     try {
-        // 如果是短链接，先解析重定向
+        // 如果是短链接，先跟随重定向获取完整URL
         let resolvedUrl = url;
         if (url.includes("b23.tv")) {
             try {
-                const resp = await fetch(url, { method: "HEAD", redirect: "manual" });
-                resolvedUrl = resp.headers.get("location") || url;
+                const resp = await fetch(url, { method: "HEAD", redirect: "follow" });
+                resolvedUrl = resp.url;  // 跟随重定向后的最终URL（含BV号）
             } catch (_) { /* 保持原URL */ }
         }
         // 从URL提取 BV号
