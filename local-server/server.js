@@ -3,30 +3,44 @@ const fs = require("fs");
 const path = require("path");
 const crypto = require("crypto");
 const { XMLParser } = require("fast-xml-parser");
-const bonjour = require("bonjour")();
 
 const PORT = process.env.PORT || 19527;
 const INBOX = process.env.INBOX_PATH || "E:\\obsidian\\obsidian-Inbox";
-const WECHAT_TOKEN = process.env.WECHAT_TOKEN || "obsidianSync2024";
+
+// 安全: 从环境变量读取密钥，命令行: set CAPTURE_API_KEY=xxx && node server.js
+const CAPTURE_API_KEY = process.env.CAPTURE_API_KEY || "";
+const WECHAT_TOKEN = process.env.WECHAT_TOKEN || "change-me-please";
+
 const processedMsgIds = new Set();
 
 const app = express();
 
-// 全局请求日志——捕捉一切
+// 安全: 限制请求体大小为 1MB
+app.use(express.json({ limit: "1mb" }));
+
+// 安全: API认证中间件
+function requireApiKey(req, res, next) {
+    if (!CAPTURE_API_KEY) return next(); // 未设密钥时兼容旧版
+    const key = req.headers["x-api-key"] || req.query.api_key || "";
+    if (key !== CAPTURE_API_KEY) {
+        return res.status(401).json({ error: "unauthorized" });
+    }
+    next();
+}
+
+// 全局请求日志
 app.use((req, res, next) => {
     if (req.url.startsWith("/wechat") || req.method === "POST") {
-        console.log(`🌐 [${new Date().toISOString()}] ${req.method} ${req.url} from ${req.ip}`);
+        console.log(`🌐 [${new Date().toISOString()}] ${req.method} ${req.url}`);
     }
     next();
 });
-
-app.use(express.json({ limit: "50mb" }));
 
 // ========== 通用接口 ==========
 
 app.get("/ping", (req, res) => res.json({ status: "ok", inbox: INBOX, version: "2.0" }));
 
-app.post("/capture", (req, res) => {
+app.post("/capture", requireApiKey, (req, res) => {
     try {
         const { title, body, url, sourceType, source } = req.body;
         if (!body && !url) return res.status(400).json({ error: "empty content" });
@@ -55,15 +69,8 @@ app.post("/capture", (req, res) => {
     }
 });
 
-// ========== 微信公众号接口 ==========
+// ========== 微信公众号接口（兼容旧版） ==========
 
-// 请求日志
-app.use("/wechat", (req, res, next) => {
-    console.log(`[wechat] ${req.method} from ${req.ip} type=${req.headers["content-type"]}`);
-    next();
-});
-
-// GET: 微信服务器URL验证
 app.get("/wechat", (req, res) => {
     const { signature, timestamp, nonce, echostr } = req.query;
     if (!signature || !timestamp || !nonce || !echostr) {
@@ -80,81 +87,132 @@ app.get("/wechat", (req, res) => {
     }
 });
 
-// POST: 接收微信消息
 app.post("/wechat", express.text({ type: "*/*" }), (req, res) => {
-    res.send(""); // 5秒内必须响应
-
+    res.send("");
     try {
         const xmlBody = req.body || "";
         if (!xmlBody) { console.log("[wechat] ❌ 空body"); return; }
-        console.log(`[wechat] 收到消息 (${xmlBody.length}字节)`);
-
         const parser = new XMLParser();
         const msg = parser.parse(xmlBody)?.xml;
         if (!msg) { console.log("[wechat] ❌ XML解析失败"); return; }
-
         const msgType = msg.MsgType;
         const msgId = msg.MsgId;
         const content = msg.Content;
-
-        if (msgId && processedMsgIds.has(msgId)) { console.log(`[wechat] ⏭ 重复消息`); return; }
+        if (msgId && processedMsgIds.has(msgId)) { return; }
         if (msgId) processedMsgIds.add(msgId);
-
         if (msgType !== "text" || !content) { console.log(`[wechat] 忽略: type=${msgType}`); return; }
-
         const urlMatch = content.match(/https?:\/\/[^\s]+/);
         const url = urlMatch ? urlMatch[0] : null;
         if (!url) { console.log(`[wechat] 非链接: ${content.slice(0,50)}`); return; }
-
-        const now = new Date();
-        const ts = now.toISOString().replace(/[:.]/g, "-").slice(0, 19).replace("T", "-");
-        const hostname = new URL(url).hostname;
-        const domain = hostname.replace(/\./g, "-");
-        const fileName = `${ts}-${domain}.md`;
-
-        let sourceType = "link", source = hostname;
-        if (hostname.includes("bilibili.com") || hostname.includes("b23.tv")) { sourceType = "video"; source = "bilibili"; }
-        else if (hostname.includes("youtube.com") || hostname.includes("youtu.be")) { sourceType = "video"; source = "youtube"; }
-        else if (hostname.includes("douyin.com")) { sourceType = "video"; source = "douyin"; }
-        else if (hostname.includes("mp.weixin.qq.com")) { source = "weixin"; }
-
-        const fromUser = (msg.FromUserName || "").slice(-6);
-        const frontmatter = [
-            "---",
-            `title: "微信消息 ${ts}"`,
-            `source_type: "${sourceType}"`,
-            `source: "${source}"`,
-            `url: "${url}"`,
-            `from_user: "${fromUser}"`,
-            `msg_id: "${msgId || "unknown"}"`,
-            `created: "${ts}"`,
-            `status: "pending"`,
-            "---",
-        ].join("\n");
-
-        const fileContent = frontmatter + "\n\n" + content;
-        fs.mkdirSync(INBOX, { recursive: true });
-        fs.writeFileSync(path.join(INBOX, fileName), fileContent, "utf-8");
-        console.log(`[wechat] ✅ ${fileName}`);
+        saveToInbox(url, content, msgId, msg.FromUserName);
     } catch (e) {
         console.error("[wechat] ❌", e.message);
     }
 });
 
+// ========== 企业微信微信客服接口 ==========
+
+app.get("/wecom-kf", (req, res) => {
+    const { msg_signature, timestamp, nonce, echostr } = req.query;
+    if (!msg_signature || !timestamp || !nonce || !echostr) {
+        return res.status(400).send("missing params");
+    }
+    try {
+        const arr = [WECHAT_TOKEN, timestamp, nonce].sort();
+        const hash = crypto.createHash("sha1").update(arr.join("")).digest("hex");
+        if (hash !== msg_signature) {
+            return res.status(403).send("signature error");
+        }
+        const decrypted = decryptAES(echostr);
+        if (decrypted) {
+            console.log("[wecom-kf] ✅ URL验证通过");
+            res.send(decrypted);
+        } else {
+            res.status(500).send("decrypt error");
+        }
+    } catch (e) {
+        console.error("[wecom-kf] ❌ 验证失败:", e.message);
+        res.status(500).send("error");
+    }
+});
+
+app.post("/wecom-kf", express.text({ type: "*/*" }), (req, res) => {
+    res.send("");
+    try {
+        const xmlBody = req.body || "";
+        if (!xmlBody) return;
+        const parser = new XMLParser({ ignoreAttributes: false });
+        const result = parser.parse(xmlBody);
+        const encrypted = result?.xml?.Encrypt;
+        if (!encrypted) return;
+
+        const decryptedXml = decryptAES(encrypted);
+        if (!decryptedXml) return;
+
+        const decryptedMsg = parser.parse(decryptedXml)?.xml;
+        if (!decryptedMsg) return;
+
+        const msgType = decryptedMsg.MsgType;
+        const content = decryptedMsg.Content;
+        const msgId = decryptedMsg.MsgId;
+
+        if (msgId && processedMsgIds.has(msgId)) return;
+        if (msgId) processedMsgIds.add(msgId);
+        if (msgType !== "text" || !content) return;
+
+        const urlMatch = content.match(/https?:\/\/[^\s]+/);
+        const url = urlMatch ? urlMatch[0] : null;
+        if (!url) return;
+
+        saveToInbox(url, content, msgId, decryptedMsg.FromUserName);
+    } catch (e) {
+        console.error("[wecom-kf] ❌", e.message);
+    }
+});
+
+// ========== 通用存入收件箱 ==========
+
+function saveToInbox(url, content, msgId, fromUser) {
+    const now = new Date();
+    const ts = now.toISOString().replace(/[:.]/g, "-").slice(0, 19).replace("T", "-");
+    const hostname = new URL(url).hostname;
+    const domain = hostname.replace(/\./g, "-");
+    const fileName = `${ts}-${domain}.md`;
+
+    let sourceType = "link", source = hostname;
+    if (hostname.includes("bilibili.com") || hostname.includes("b23.tv")) { sourceType = "video"; source = "bilibili"; }
+    else if (hostname.includes("youtube.com") || hostname.includes("youtu.be")) { sourceType = "video"; source = "youtube"; }
+    else if (hostname.includes("douyin.com") || hostname.includes("weixin.qq.com/sph")) { sourceType = "video"; source = "douyin"; }
+    else if (hostname.includes("mp.weixin.qq.com")) { source = "weixin"; }
+
+    const from = (fromUser || "").slice(-6);
+    const frontmatter = [
+        "---",
+        `title: "消息 ${ts}"`,
+        `source_type: "${sourceType}"`,
+        `source: "${source}"`,
+        `url: "${url}"`,
+        `from_user: "${from}"`,
+        `msg_id: "${msgId || "unknown"}"`,
+        `created: "${ts}"`,
+        `status: "pending"`,
+        "---",
+    ].join("\n");
+
+    fs.mkdirSync(INBOX, { recursive: true });
+    fs.writeFileSync(path.join(INBOX, fileName), frontmatter + "\n\n" + content, "utf-8");
+    console.log(`[inbox] ✅ ${fileName}`);
+}
+
 // ========== 启动 ==========
 
 app.listen(PORT, "0.0.0.0", () => {
     const localIP = getLocalIP();
-    console.log(`\n📥 Obsidian Capture Server v2`);
+    console.log(`\n📥 Capture Server 已启动`);
     console.log(`   端口: ${PORT}  收件箱: ${INBOX}`);
-    console.log(`   地址: http://${localIP}:${PORT}/capture\n`);
-
-    bonjour.publish({
-        name: `obsidian-capture-${localIP.replace(/\./g, "-")}`,
-        type: "obsidian-capture", protocol: "tcp", port: PORT,
-        txt: { version: "2.0", hostname: require("os").hostname() }
-    });
-    console.log("   mDNS 已广播 ✅\n");
+    console.log(`   安全: API认证${CAPTURE_API_KEY ? "已启用 ✅" : "未启用 ⚠️"}`);
+    console.log(`   微信Token: ${WECHAT_TOKEN === "change-me-please" ? "请修改 ⚠️" : "已设置 ✅"}`);
+    console.log(`   企业微信端点: /wecom-kf\n`);
 });
 
 function getLocalIP() {
@@ -165,4 +223,21 @@ function getLocalIP() {
         }
     }
     return "127.0.0.1";
+}
+
+function decryptAES(encrypted) {
+    try {
+        const key = Buffer.from(WECHAT_TOKEN + "=".repeat(43 - WECHAT_TOKEN.length), "utf-8").slice(0, 43);
+        const aesKey = Buffer.from(key.toString() + "=", "base64");
+        const iv = aesKey.slice(0, 16);
+        const decipher = crypto.createDecipheriv("aes-256-cbc", aesKey, iv);
+        decipher.setAutoPadding(false);
+        let decrypted = decipher.update(encrypted, "base64", "utf-8");
+        decrypted += decipher.final("utf-8");
+        const pad = decrypted.charCodeAt(decrypted.length - 1);
+        return decrypted.slice(0, decrypted.length - pad);
+    } catch (e) {
+        console.error("[decrypt] 失败:", e.message);
+        return null;
+    }
 }
