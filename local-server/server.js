@@ -227,15 +227,18 @@ function getLocalIP() {
 
 function decryptAES(encrypted) {
     try {
-        const key = Buffer.from(WECHAT_TOKEN + "=".repeat(43 - WECHAT_TOKEN.length), "utf-8").slice(0, 43);
-        const aesKey = Buffer.from(key.toString() + "=", "base64");
-        const iv = aesKey.slice(0, 16);
-        const decipher = crypto.createDecipheriv("aes-256-cbc", aesKey, iv);
+        // 企业微信使用 EncodingAESKey (43字符base64) 做 AES-256-CBC 解密
+        const encodingAESKey = WECHAT_TOKEN;  // 实际应用中从公众号/企微后台获取
+        // 确保是 43 字符 base64
+        const key = Buffer.from(encodingAESKey + "=", "base64");  // 43+1 pad → 32 bytes AES-256
+        const iv = key.slice(0, 16);
+        const decipher = crypto.createDecipheriv("aes-256-cbc", key, iv);
         decipher.setAutoPadding(false);
         let decrypted = decipher.update(encrypted, "base64", "utf-8");
         decrypted += decipher.final("utf-8");
-        const pad = decrypted.charCodeAt(decrypted.length - 1);
-        return decrypted.slice(0, decrypted.length - pad);
+        // 去除 PKCS#7 padding
+        const lastByte = decrypted.charCodeAt(decrypted.length - 1);
+        return decrypted.slice(0, decrypted.length - lastByte);
     } catch (e) {
         console.error("[decrypt] 失败:", e.message);
         return null;
