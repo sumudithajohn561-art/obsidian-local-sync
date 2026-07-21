@@ -1,13 +1,11 @@
 import type { NoteFrontmatter } from "../utils/FrontmatterUtils";
 
-export type ContentType = "link" | "image" | "video" | "file" | "plain" | "unknown";
+export type ContentType = "link" | "transcript" | "image" | "video" | "file" | "plain" | "unknown";
 
-/**
- * 根据 frontmatter 判断素材类型
- */
 export function classify(fm: NoteFrontmatter): ContentType {
     const st = fm.source_type;
     if (st === "link") return "link";
+    if (st === "transcript") return "transcript";  // 已转录，直接搬运
     if (st === "image") return "image";
     if (st === "video") return "video";
     if (st === "file") return "file";
