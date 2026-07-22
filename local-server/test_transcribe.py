@@ -1,21 +1,23 @@
-"""测试核心链路：加载模型 → 转录中文语音 → 写入 Obsidian 收件箱"""
+"""CPU 模式测试核心链路：加载模型 → 转录中文语音 → 写入 Obsidian 收件箱"""
 import os, sys
 from pathlib import Path
 from datetime import datetime
+
+os.environ["HF_HUB_DISABLE_SYMLINKS_WARNING"] = "1"
 
 INBOX = Path(os.environ.get("CAPTURE_INBOX", r"E:\obsidian\obsidian-Inbox"))
 AUDIO = r"C:\Users\29979\AppData\Local\Temp\test_speech.wav"
 
 print("=" * 50)
-print("核心链路测试：转录 + 收件箱写入")
+print("核心链路测试（CPU 模式）")
 print("=" * 50)
 print()
 
-# === 加载模型 ===
-print("[1/3] 加载 faster-whisper large-v3...")
+# === 加载模型 (CPU） ===
+print("[1/3] 加载 faster-whisper large-v3 (CPU)...")
 from faster_whisper import WhisperModel
-model = WhisperModel("large-v3", device="cuda", compute_type="int8_float16")
-print("  ✅ 模型就绪")
+model = WhisperModel("large-v3", device="cpu", compute_type="int8")
+print("  ✅ 模型就绪（CPU 模式）")
 print()
 
 # === 转录 ===
@@ -40,7 +42,7 @@ ts = datetime.now().strftime("%Y%m%d-%H%M%S")
 file_path = INBOX / f"{ts}-test-whisper-transcribe.md"
 
 content = f"""---
-title: "Whisper 转录测试"
+title: "Whisper 转录测试（CPU模式）"
 source_type: "transcript"
 source: "test"
 url: ""
@@ -51,7 +53,10 @@ tags: [test, transcription, faster-whisper]
 
 ## 测试说明
 
-本次测试使用 Windows TTS 生成的中文语音文件，通过 faster-whisper large-v3 模型进行语音识别转录。
+本次测试使用 Windows TTS 生成的中文语音文件作为输入：
+> "这是来自视频转录流水线的一次完整测试。从语音识别到文本转录，最终写入 Obsidian 收件箱。"
+
+通过 faster-whisper large-v3 模型（CPU/INT8 模式）进行语音识别转录。
 
 ---
 
