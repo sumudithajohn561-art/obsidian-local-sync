@@ -100,7 +100,7 @@ def download_video(url: str, output_dir: Path) -> Path | None:
         "--merge-output-format", "mp4",
         "-o", output_template,
         "--socket-timeout", "60",
-        "--cookies-from-browser", "chrome",   # 使用浏览器 cookie 绕过反爬
+        "--extractor-retries", "3",  # 自动重试3次
         url,
     ]
 
