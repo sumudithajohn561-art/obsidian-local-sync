@@ -231,6 +231,15 @@ app.post("/capture", requireApiKey, (req, res) => {
         ].join("\n");
         const content = frontmatter + "\n\n" + (body || url || "");
         fs.mkdirSync(INBOX, { recursive: true });
+
+        // 视频链接放入转录队列
+        if (sourceType === "video" && source !== "weixin" && url) {
+            enqueueTranscribe(url, source || "unknown");
+            console.log(`[capture] 🎬 视频链接入队: ${url.slice(0, 60)}...`);
+            res.json({ ok: true, file: null, queued: true });
+            return;
+        }
+
         fs.writeFileSync(path.join(INBOX, fileName), content, "utf-8");
         console.log(`[capture] ✅ ${fileName}`);
         res.json({ ok: true, file: fileName });
