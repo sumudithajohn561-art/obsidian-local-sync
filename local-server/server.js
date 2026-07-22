@@ -23,9 +23,40 @@ app.use(express.json({ limit: "1mb" }));
 // 视频转录队列
 // ============================================================
 
+const QUEUE_FILE = path.join(INBOX, "transcript-queue.json");
 const transcriptQueue = [];
 let transcriberProc = null;
 let transcriberReady = false;
+
+/** 从磁盘恢复未完成的任务 */
+function restoreQueue() {
+    try {
+        if (fs.existsSync(QUEUE_FILE)) {
+            const saved = JSON.parse(fs.readFileSync(QUEUE_FILE, "utf-8"));
+            if (Array.isArray(saved) && saved.length > 0) {
+                transcriptQueue.push(...saved);
+                console.log(`[transcriber] 恢复 ${saved.length} 个未完成任务`);
+            }
+            fs.unlinkSync(QUEUE_FILE);  // 读取后删除，避免重复恢复
+        }
+    } catch (e) {
+        console.error("[transcriber] 队列恢复失败:", e.message);
+    }
+}
+
+/** 将队列持久化到磁盘 */
+function persistQueue() {
+    try {
+        const active = transcriptQueue.filter(t => !t.done);
+        if (active.length > 0) {
+            fs.writeFileSync(QUEUE_FILE, JSON.stringify(active, null, 2), "utf-8");
+        } else if (fs.existsSync(QUEUE_FILE)) {
+            fs.unlinkSync(QUEUE_FILE);
+        }
+    } catch (e) {
+        console.error("[transcriber] 队列持久化失败:", e.message);
+    }
+}
 
 /**
  * 启动 Python 转录长驻进程
@@ -104,7 +135,7 @@ function handleTranscriberResult(result) {
 
     // 清理已完成的任务引用
     const idx = transcriptQueue.findIndex(t => t.taskId === result.taskId);
-    if (idx >= 0) transcriptQueue.splice(idx, 1);
+    if (idx >= 0) { transcriptQueue.splice(idx, 1); persistQueue(); }
 
     // 继续处理队列
     drainQueue();
@@ -116,6 +147,7 @@ function handleTranscriberResult(result) {
 function enqueueTranscribe(url, platform) {
     const taskId = crypto.randomUUID();
     transcriptQueue.push({ taskId, url: url, platform: platform, done: false });
+    persistQueue();  // 持久化到磁盘
     console.log(`[transcriber] 入队: ${platform} (队列长度: ${transcriptQueue.length})`);
     drainQueue();
 }
@@ -391,6 +423,9 @@ app.listen(PORT, "0.0.0.0", () => {
     console.log(`   企业微信端点: /wecom-kf`);
     console.log(`   转录服务: 启动中...\n`);
 
+    // 恢复未完成的转录任务
+    restoreQueue();
+
     // 启动 Python 转录进程
     startTranscriber();
 });
@@ -398,6 +433,7 @@ app.listen(PORT, "0.0.0.0", () => {
 // 优雅退出
 process.on("SIGINT", () => {
     console.log("\n[server] 收到 SIGINT，正在退出...");
+    persistQueue();  // 退出前持久化未完成任务
     if (transcriberProc && !transcriberProc.killed) {
         transcriberProc.stdin.end();
         transcriberProc.kill("SIGTERM");
@@ -406,6 +442,7 @@ process.on("SIGINT", () => {
 });
 
 process.on("SIGTERM", () => {
+    persistQueue();  // 退出前持久化未完成任务
     if (transcriberProc && !transcriberProc.killed) {
         transcriberProc.stdin.end();
         transcriberProc.kill("SIGTERM");
