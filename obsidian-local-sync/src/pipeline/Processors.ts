@@ -75,6 +75,11 @@ export async function processFile(
             }
         }
 
+        if (contentType === "transcript") {
+            // 视频转录完成品——内容已由 transcriber.py 生成，直接搬运到 Vault
+            // 不做任何额外处理，保留前端写入的完整 frontmatter 和正文
+        }
+
         if (contentType === "image" && frontmatter.attachment) {
             // 图片: 移动附件到 vault 附件目录
             const inboxDir = path.dirname(filePath);
