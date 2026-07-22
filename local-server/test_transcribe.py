@@ -1,7 +1,14 @@
-"""CPU 模式测试核心链路：加载模型 → 转录中文语音 → 写入 Obsidian 收件箱"""
-import os, sys
+"""GPU 模式测试核心链路：加载模型 → 转录中文语音 → 写入 Obsidian 收件箱"""
+import os, sys, site
 from pathlib import Path
 from datetime import datetime
+
+# 注册 NVIDIA CUDA DLL 路径
+_pkg_dir = site.getsitepackages()[1]
+for _sub in ["cublas", "cuda_runtime", "cuda_nvrtc"]:
+    _bin = os.path.join(_pkg_dir, "nvidia", _sub, "bin")
+    if os.path.isdir(_bin):
+        os.add_dll_directory(_bin)
 
 os.environ["HF_HUB_DISABLE_SYMLINKS_WARNING"] = "1"
 
@@ -9,15 +16,15 @@ INBOX = Path(os.environ.get("CAPTURE_INBOX", r"E:\obsidian\obsidian-Inbox"))
 AUDIO = r"C:\Users\29979\AppData\Local\Temp\test_speech.wav"
 
 print("=" * 50)
-print("核心链路测试（CPU 模式）")
+print("核心链路测试（GPU 模式）")
 print("=" * 50)
 print()
 
-# === 加载模型 (CPU） ===
-print("[1/3] 加载 faster-whisper large-v3 (CPU)...")
+# === 加载模型 (GPU) ===
+print("[1/3] 加载 faster-whisper large-v3 (CUDA)...")
 from faster_whisper import WhisperModel
-model = WhisperModel("large-v3", device="cpu", compute_type="int8")
-print("  ✅ 模型就绪（CPU 模式）")
+model = WhisperModel("large-v3", device="cuda", compute_type="int8_float16")
+print("  ✅ 模型就绪（CUDA 模式）")
 print()
 
 # === 转录 ===
@@ -39,24 +46,21 @@ print()
 # === 写入 Obsidian 收件箱 ===
 print("[3/3] 写入 Obsidian 收件箱...")
 ts = datetime.now().strftime("%Y%m%d-%H%M%S")
-file_path = INBOX / f"{ts}-test-whisper-transcribe.md"
+file_path = INBOX / f"{ts}-test-gpu-transcribe.md"
 
 content = f"""---
-title: "Whisper 转录测试（CPU模式）"
+title: "Whisper 转录测试（GPU模式）"
 source_type: "transcript"
 source: "test"
 url: ""
 created: "{ts}"
 status: "test"
-tags: [test, transcription, faster-whisper]
+tags: [test, transcription, faster-whisper, gpu]
 ---
 
 ## 测试说明
 
-本次测试使用 Windows TTS 生成的中文语音文件作为输入：
-> "这是来自视频转录流水线的一次完整测试。从语音识别到文本转录，最终写入 Obsidian 收件箱。"
-
-通过 faster-whisper large-v3 模型（CPU/INT8 模式）进行语音识别转录。
+本次测试使用 Windows TTS 生成的中文语音文件作为输入，通过 faster-whisper large-v3 模型（**CUDA/INT8_float16 GPU 模式**）进行语音识别转录。
 
 ---
 
@@ -70,6 +74,6 @@ print(f"  ✅ 已写入: {file_path}")
 print()
 
 print("=" * 50)
-print("✅ 全链路测试通过！")
+print("✅ GPU 模式全链路测试通过！")
 print(f"📁 笔记位置: {file_path}")
 print("=" * 50)

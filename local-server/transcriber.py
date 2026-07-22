@@ -23,6 +23,14 @@ import json
 import os
 import sys
 import tempfile
+import site
+
+# 注册 NVIDIA CUDA DLL 路径（Python 3.8+ Windows 需要显式注册）
+_pkg_dir = site.getsitepackages()[1]  # Lib/site-packages
+for _sub in ["cublas", "cuda_runtime", "cuda_nvrtc"]:
+    _bin = os.path.join(_pkg_dir, "nvidia", _sub, "bin")
+    if os.path.isdir(_bin):
+        os.add_dll_directory(_bin)
 import subprocess
 import shutil
 import traceback
