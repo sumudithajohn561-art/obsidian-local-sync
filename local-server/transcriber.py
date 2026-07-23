@@ -101,6 +101,7 @@ def download_video(url: str, output_dir: Path) -> Path | None:
         "-o", output_template,
         "--socket-timeout", "60",
         "--extractor-retries", "3",  # 自动重试3次
+        "--proxy", "http://127.0.0.1:10808",   # 使用代理绕过反爬
         url,
     ]
 
