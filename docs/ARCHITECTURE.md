@@ -1,37 +1,69 @@
 # 架构设计文档
 
-> 版本: v1.0 | 日期: 2026-06-29
+> 版本: v2.0 | 日期: 2026-07-23
 
 ---
 
-## 系统架构图
+## 系统架构图（v2 HTTP 直传）
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
-│                          手机端 (Android)                        │
+│                          手机端                                  │
 │                                                                   │
-│  ┌──────────┐    ┌──────────────────┐    ┌──────────────────┐   │
-│  │ 微信/浏览器 │───→│ MainActivity.kt  │───→│ FileWriter.kt    │   │
-│  │ 分享内容   │    │ (透明主题, 秒开)  │    │ → Syncthing文件夹 │   │
-│  └──────────┘    └──────┬───────────┘    └──────────────────┘   │
-│                         │                                         │
-│                  ┌──────┴───────────┐                            │
-│                  │ ContentClassifier │                            │
-│                  │ ContentExtractor  │                            │
-│                  │ MarkdownGenerator │                            │
-│                  │ FrontmatterBuilder│                            │
-│                  └──────────────────┘                            │
-└─────────────────────────┬───────────────────────────────────────┘
-                          │ 文件系统 (本地)
-                          │ /sdcard/Syncthing/Obsidian-Inbox/
-                          │
-                    ┌─────┴─────┐
-                    │ Syncthing  │  P2P TLS 1.3 加密传输
-                    └─────┬─────┘
-                          │
-┌─────────────────────────┴───────────────────────────────────────┐
+│  微信 (用户)                                                       │
+│   └── 发送链接到公众号/企业微信客服                                 │
+│                    │                                              │
+│   Quick Capture App (可选)                                        │
+│   └── Android Share Intent 接收 → 存 Markdown 到 Syncthing 目录  │
+└────────────────────┬──────────────────────────────────────────────┘
+                     │
+         ┌───────────┴───────────┐
+         │  微信服务器            │
+         │  POST XML → 公网URL   │
+         └───────────┬───────────┘
+                     │ (frp/ngrok 内网穿透)
+                     ▼
+┌─────────────────────────────────────────────────────────────────┐
 │                        电脑端 (Windows)                          │
 │                                                                   │
+│  local-server (Node.js) :19527                                   │
+│  ┌─────────────────────────────────────────────┐                │
+│  │  /wechat     — 微信公众号回调                │                │
+│  │  /wecom-kf   — 企业微信客服回调               │                │
+│  │  /capture    — 通用捕获 API (API Key 认证)    │                │
+│  │  /ping       — 健康检查                      │                │
+│  └───────────────────┬─────────────────────────┘                │
+│                      │                                            │
+│              ┌───────┴──────────┐                                │
+│              │  saveToInbox()    │                                │
+│              │  URL 识别+分类    │                                │
+│              └───────┬──────────┘                                │
+│                      │                                            │
+│         ┌────────────┼──────────────┐                            │
+│         ▼            ▼              ▼                            │
+│    视频链接      网页/公众号     其他内容                           │
+│   (B站/YT/抖音)    链接                                          │
+│         │            │              │                            │
+│         ▼            ▼              ▼                            │
+│   转录队列     写 .md 到       写 .md 到                           │
+│   (持久化)     收件箱          收件箱                              │
+│         │                                                         │
+│         ▼                                                         │
+│  transcriber.py (Python 长驻进程)                                 │
+│  ┌─────────────────────────────────────┐                        │
+│  │  stdin JSON ← 待处理任务             │                        │
+│  │         │                            │                        │
+│  │  yt-dlp 下载视频 (代理+cookies可选)   │                        │
+│  │         ↓                            │                        │
+│  │  ffmpeg 提取音频 (16kHz 单声道)       │                        │
+│  │         ↓                            │                        │
+│  │  faster-whisper large-v3 转录        │                        │
+│  │         ↓                            │                        │
+│  │  写入收件箱 .md                       │                        │
+│  │         ↓                            │                        │
+│  │  stdout JSON → 处理结果              │                        │
+│  └─────────────────────────────────────┘                        │
+│                      │                                            │
 │  E:\obsidian\obsidian-Inbox\                                     │
 │          │                                                        │
 │  ┌───────┴──────────┐                                           │
@@ -45,23 +77,19 @@
 │          │                                                        │
 │  ┌───────┴──────────────────────────────┐                       │
 │  │         ContentClassifier.ts          │                       │
-│  │    link | image | video | file | plain│                       │
+│  │  link | transcript | image | video |  │                       │
+│  │  file | plain                        │                       │
 │  └───────┬──────────────────────────────┘                       │
 │          │                                                        │
 │    ┌─────┼─────────┬──────────┬──────────┐                      │
 │    ▼     ▼         ▼          ▼          ▼                      │
-│  [Link] [Image] [Video]   [File]    [Plain]                     │
+│  [Link] [Transcript] [Video] [Image] [File/Plain]               │
 │    │     │         │          │          │                       │
 │    ▼     ▼         ▼          ▼          ▼                      │
-│  全文   移动     字幕抓取    移动      格式化                      │
-│  抓取   附件     +标题      附件                                 │
+│  全文   直接      字幕       移动      格式化                      │
+│  抓取   搬运      抓取       附件                                │
 │    │     │         │          │          │                       │
 │    └─────┴─────────┴──────────┴──────────┘                      │
-│                      │                                            │
-│              ┌───────┴──────────┐                               │
-│              │  AIProcessor.ts  │  (可选)                        │
-│              │  标签 + 摘要      │                               │
-│              └───────┬──────────┘                               │
 │                      │                                            │
 │              ┌───────┴──────────┐                               │
 │              │    Mover.ts      │                               │
@@ -69,8 +97,8 @@
 │              └──────────────────┘                               │
 │                      │                                            │
 │                      ▼                                            │
-│  E:\obsidian\收件箱\2026-06-29\                                 │
-│  ├── 2026-06-29-143052-用AI做跨境电商选品.md                      │
+│  E:\obsidian\收件箱\2026-07-23\                                  │
+│  ├── 20260723-143052-bilibili-树恨你.md                           │
 │  └── ...                                                         │
 └─────────────────────────────────────────────────────────────────┘
 ```
@@ -79,62 +107,54 @@
 
 ## 技术决策记录 (ADR)
 
-### ADR-1: 为什么用 Syncthing 而不是自定义网络协议？
+### ADR-1: 为什么用 HTTP 回调而不是 Syncthing P2P？
 
-- **决策**: 使用 Syncthing 作为文件传输层
-- **原因**: Syncthing 已解决了 NAT 穿透、加密传输、增量同步、冲突处理等问题。自己实现需要数千行代码
-- **代价**: 用户需要额外安装 Syncthing
-- **替代方案**: WebRTC、自建 WebSocket、MQTT
+- **决策**: v2 采用微信回调 + HTTP 直传，v1 的 Syncthing 方案作为可选通道保留
+- **原因**: 微信回调是"用户最自然的操作"——在微信里转发给公众号，比打开 App 分享更快
+- **代价**: 需要内网穿透（frp/ngrok），且依赖微信服务器转发
+- **对比 v1**: Syncthing 方案不需要公网暴露，但需要用户额外安装 Syncthing
 
-### ADR-2: 为什么用文件系统而不是网络通信？
+### ADR-2: 为什么转录用 Python 长驻进程而不是 on-demand？
 
-- **决策**: 手机和电脑通过共享文件夹通信，而不是 socket/HTTP
-- **原因**: 极度简单、零耦合、天然支持离线、Syncthing 自动处理传输
-- **代价**: 有延迟（依赖 Syncthing 同步周期）
-- **协议**: Markdown 文件的 YAML frontmatter 就是通信协议
+- **决策**: transcriber.py 作为长驻子进程，通过 stdin/stdout JSON 通信
+- **原因**: faster-whisper 模型 ~2.9GB，加载一次需数十秒。常驻内存避免每次加载
+- **代价**: 空闲时占用 GPU 显存 (~2GB int8 量化)，但 RTX 4060 有 8GB 总显存
+- **通信协议**: 每行一个 JSON，简单可靠
 
-### ADR-3: 为什么 Android App 无状态？
+### ADR-3: 为什么视频号/抖音不做本地 Whisper？
 
-- **决策**: App 不设数据库，每次分享创建独立文件
-- **原因**: 简化设计、避免同步状态冲突、文件系统本身就是数据库
-- **代价**: 无法追踪分享历史（但这是 Obsidian 的事）
-
-### ADR-4: 为什么 AI 处理是同步而非队列？
-
-- **决策**: v1 中 AI 调用在管道中内联执行
-- **原因**: 用户分享频率低（偶尔一两条），异步队列增加复杂度无收益
-- **代价**: 大文件处理时可能阻塞后续文件
-- **未来**: v2 可改为消息队列
+- **决策**: 视频号和抖音的 yt-dlp 支持有限，降级为链接保存
+- **原因**: 视频号无 yt-dlp 提取器；抖音需 cookies。强行实现成本远大于收益
+- **降级策略**: 保留原文链接+平台标注，用户可手动查看
 
 ---
 
 ## 数据流
 
-### 分享内容类型判断
+### URL 识别与分类
 
 ```
-MIME type ──┬── text/plain ──┬── 含URL? ──→ LINK
-            │                └── 无URL? ──→ PLAINTEXT
-            ├── image/*      ──→ IMAGE
-            ├── video/*      ──→ VIDEO_LINK
-            └── */*          ──→ FILE
+URL hostname ─┬── bilibili.com / b23.tv ──────→ video/bilibili → 转录队列
+              ├── youtube.com / youtu.be ──────→ video/youtube → 转录队列
+              ├── douyin.com ──────────────────→ video/douyin → 转录队列
+              ├── channels.weixin.qq.com ──────→ video/weixin-video → 写文件(降级)
+              ├── mp.weixin.qq.com ────────────→ link/weixin → 写文件
+              ├── 其他 URL ────────────────────→ link → 写文件
+              └── 非 URL ──────────────────────→ plain → 写文件
 ```
 
-### 文件命名规则
+### 转录队列状态机
 
 ```
-手机端: {timestamp}-{title}.md
-  例: 2026-06-29-143052-用AI做跨境电商选品.md
-
-电脑端输出: {原文件名}.md (同名加序号)
-  例: 2026-06-29-143052-用AI做跨境电商选品.md
-  例: 2026-06-29-143052-用AI做跨境电商选品-1.md (冲突时)
+入队 → started (发送给Python) → 处理中 → done/ok (写入收件箱, 清理)
+                        ↓
+                      error (日志记录, 清理)
 ```
 
 ### Frontmatter 状态机
 
 ```
-pending → processing → processed
+pending → processing → processed (成功, 移入Vault)
                       → error (保留在收件箱, 不删除)
 ```
 
@@ -144,21 +164,22 @@ pending → processing → processed
 
 | 层面 | 措施 |
 |------|------|
-| 传输加密 | Syncthing TLS 1.3 + X.509 证书 |
-| 存储 | 所有数据仅存本地磁盘 |
-| AI API | API Key 仅存本地 Obsidian 数据目录 |
-| 权限 | Android App 仅需存储权限 |
-| 开源审计 | MIT 许可，代码完全透明 |
+| API 认证 | `CAPTURE_API_KEY` 环境变量，所有 /capture 请求需携带 `x-api-key` 头 |
+| 微信回调 | SHA1 签名验证 (/wechat)，AES-256-CBC 解密 (/wecom-kf) |
+| msgId 去重 | `processedMsgIds` Set 防止重复处理 |
+| 请求限制 | Express JSON body 限制 1MB |
+| Token | 微信 Token 从环境变量读取，不硬编码 |
+| 本地存储 | 所有数据仅存本地磁盘 |
 
 ---
 
 ## 依赖清单
 
-### Android App
-- Kotlin 1.9.20
-- Jetpack Compose (Material3)
-- Android SDK 34 (min 26)
-- 无第三方网络/数据库库
+### local-server
+- Node.js 20+ (Express, fast-xml-parser)
+- Python 3.10+ (faster-whisper, yt-dlp)
+- ffmpeg (系统安装，需在 PATH 中)
+- NVIDIA GPU + CUDA (可选，加速 Whisper)
 
 ### Obsidian 插件
 - TypeScript 5.3
@@ -166,7 +187,11 @@ pending → processing → processed
 - yaml 2.4 (frontmatter 解析)
 - Obsidian API 0.15+
 
-### 基础设施
-- Syncthing 2.1.1 (P2P 同步)
-- Node.js 20+ (插件构建)
-- Android Studio Hedgehog+ (App 构建)
+### Android App (可选)
+- Kotlin 1.9.20
+- Jetpack Compose (Material3)
+- Android SDK 34 (min 26)
+
+### 基础设施 (可选)
+- frp/ngrok (内网穿透，暴露 /wechat 到公网)
+- Syncthing 2.1.1 (如果使用 Android App 通道)

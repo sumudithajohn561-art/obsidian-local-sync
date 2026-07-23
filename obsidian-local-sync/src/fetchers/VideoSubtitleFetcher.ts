@@ -22,6 +22,10 @@ export async function fetchVideoInfo(url: string, platform: string): Promise<Vid
                 return await fetchBilibiliInfo(url);
             case "youtube":
                 return await fetchYoutubeInfo(url);
+            case "douyin":
+                // 抖音在 Obsidian 环境中也依赖 yt-dlp，降级为链接
+                log.warn("抖音视频需通过 local-server 转录");
+                return null;
             default:
                 log.warn(`不支持的视频平台: ${platform}`);
                 return null;
