@@ -15,6 +15,9 @@ stdout 输出格式:
 
 环境变量:
   CAPTURE_INBOX — 收件箱目录路径
+  YTDLP_PROXY   — yt-dlp 代理地址 (如 http://127.0.0.1:10808)，不设则不使用代理
+  YTDLP_COOKIES_FILE — 浏览器导出的 Netscape 格式 cookie 文件路径 (用于 YouTube/抖音等)
+  YTDLP_COOKIES_BROWSER — 浏览器名称 (如 chrome/edge/brave)，需要浏览器已关闭
 
 依赖: faster-whisper, yt-dlp, ffmpeg (系统安装)
 """
@@ -47,6 +50,9 @@ MODEL_SIZE = "large-v3"
 COMPUTE_TYPE = "int8_float16"  # RTX 4060 4GB 适用的 int8 量化
 DEVICE = "cuda"
 LANGUAGE = "zh"
+PROXY = os.environ.get("YTDLP_PROXY", "")          # yt-dlp 代理，不设则直连
+COOKIES_FILE = os.environ.get("YTDLP_COOKIES_FILE", "")  # Netscape格式cookie文件路径
+COOKIES_BROWSER = os.environ.get("YTDLP_COOKIES_BROWSER", "")  # 浏览器名称
 
 
 # ============================================================
@@ -85,6 +91,38 @@ def timestamp() -> str:
 # 步骤 1: yt-dlp 下载视频
 # ============================================================
 
+def build_ytdlp_cmd(url: str, output_template: str) -> list[str]:
+    """
+    构建 yt-dlp 命令行，根据环境变量决定是否使用代理和 cookies。
+    """
+    cmd = [
+        "yt-dlp",
+        "-f", "best[height<=1080]/best",
+        "--no-playlist",
+        "--merge-output-format", "mp4",
+        "-o", output_template,
+        "--socket-timeout", "60",
+        "--extractor-retries", "3",
+    ]
+
+    # 代理（可选）
+    if PROXY:
+        cmd += ["--proxy", PROXY]
+
+    # Cookies（二选一：优先 cookie 文件，其次浏览器）
+    if COOKIES_FILE:
+        if os.path.isfile(COOKIES_FILE):
+            cmd += ["--cookies", COOKIES_FILE]
+            log(f"  使用 cookie 文件: {COOKIES_FILE}")
+        else:
+            log(f"  ⚠️ cookie 文件不存在: {COOKIES_FILE}")
+    elif COOKIES_BROWSER:
+        cmd += ["--cookies-from-browser", COOKIES_BROWSER]
+
+    cmd.append(url)
+    return cmd
+
+
 def download_video(url: str, output_dir: Path) -> Path | None:
     """
     使用 yt-dlp 下载视频，返回视频文件路径。
@@ -93,17 +131,7 @@ def download_video(url: str, output_dir: Path) -> Path | None:
     log(f"下载视频: {url}")
     output_template = str(output_dir / "%(title)s.%(ext)s")
 
-    cmd = [
-        "yt-dlp",
-        "-f", "best[height<=1080]/best",
-        "--no-playlist",
-        "--merge-output-format", "mp4",
-        "-o", output_template,
-        "--socket-timeout", "60",
-        "--extractor-retries", "3",  # 自动重试3次
-        "--proxy", "http://127.0.0.1:10808",   # 使用代理绕过反爬
-        url,
-    ]
+    cmd = build_ytdlp_cmd(url, output_template)
 
     try:
         subprocess.run(cmd, check=True, capture_output=True, text=True, timeout=300)

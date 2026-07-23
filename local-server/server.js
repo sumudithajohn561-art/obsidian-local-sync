@@ -390,7 +390,8 @@ function saveToInbox(url, content, msgId, fromUser) {
     fs.mkdirSync(INBOX, { recursive: true });
 
     // 视频链接放入转录队列，由 transcriber.py 处理完成后写入收件箱
-    if (sourceType === "video" && source !== "weixin") {
+    // 例外: 视频号(weixin-video) yt-dlp 不支持，写 pending 文件降级为链接
+    if (sourceType === "video" && source !== "weixin" && source !== "weixin-video") {
         enqueueTranscribe(url, source);
         console.log(`[inbox] 🎬 视频链接入队: ${url.slice(0, 60)}...`);
         return;  // 不写 pending 文件，等转录完成后统一写入

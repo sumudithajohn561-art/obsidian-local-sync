@@ -55,6 +55,12 @@ export async function processFile(
             if (fetched) {
                 newBody = fetched;
                 frontmatter.source = isWechat ? "微信公众号" : frontmatter.source;
+            } else {
+                // 抓取失败降级：保留原始链接，让用户在 Obsidian 中手动打开
+                newBody = `> ${frontmatter.title || "未命名"}\n\n` +
+                    `**原文链接:** ${frontmatter.url}\n\n` +
+                    `> ⚠️ 全文抓取失败，请点击链接手动阅读。\n\n` +
+                    (body.trim() || "");
             }
         }
 
@@ -66,12 +72,24 @@ export async function processFile(
                 if (info) {
                     let videoBody = `> ${info.title || frontmatter.title || "视频"}\n\n`;
                     videoBody += `**视频链接:** ${frontmatter.url}\n`;
+                    videoBody += `**平台:** ${videoInfo.platform}\n`;
                     if (info.subtitle) {
                         videoBody += `\n---\n## 字幕/转写\n\n${info.subtitle}\n`;
                     }
                     newBody = videoBody;
                     if (info.title) frontmatter.title = info.title;
+                } else {
+                    // 视频信息抓取失败降级
+                    newBody = `> ${frontmatter.title || "视频"}\n\n` +
+                        `**视频链接:** ${frontmatter.url}\n` +
+                        `**平台:** ${videoInfo.platform}\n\n` +
+                        `> ⚠️ 字幕/标题抓取失败，请点击链接手动查看。\n`;
                 }
+            } else {
+                // 非支持平台的视频链接，降级保留链接
+                newBody = `> ${frontmatter.title || "视频"}\n\n` +
+                    `**视频链接:** ${frontmatter.url}\n\n` +
+                    `> ⚠️ 该视频平台暂不支持自动抓取。\n`;
             }
         }
 

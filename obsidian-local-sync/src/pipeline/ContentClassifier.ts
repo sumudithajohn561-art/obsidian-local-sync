@@ -22,10 +22,12 @@ export function isWechatArticle(url: string): boolean {
 
 /**
  * 判断URL是否为视频平台链接
+ * 注意: 视频号(weixin-video)不返回，因为 yt-dlp 不支持，
+ * server.js 端会以 plain/link 格式存入，Obsidian 插件不做特殊处理
  */
 export function isVideoUrl(url: string): { platform: string } | null {
     if (url.includes("bilibili.com") || url.includes("b23.tv")) return { platform: "bilibili" };
     if (url.includes("youtube.com/watch") || url.includes("youtu.be/")) return { platform: "youtube" };
-    if (url.includes("douyin.com/video/")) return { platform: "douyin" };
+    if (url.includes("douyin.com/video/") || url.includes("v.douyin.com/")) return { platform: "douyin" };
     return null;
 }
