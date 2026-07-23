@@ -95,7 +95,23 @@ export async function processFile(
 
         if (contentType === "transcript") {
             // 视频转录完成品——内容已由 transcriber.py 生成，直接搬运到 Vault
-            // 不做任何额外处理，保留前端写入的完整 frontmatter 和正文
+            // 原始 frontmatter 保持不变（Obsidian 会自动管理属性），只做文件搬家
+            // 避免 parseFrontmatter/buildMarkdown 破坏原始 YAML 结构
+            const outputDir = path.join(vaultRoot, settings.outputDir, dateDirName());
+            ensureDir(outputDir);
+            const outputFileName = path.basename(filePath);
+            let finalPath = path.join(outputDir, outputFileName);
+            let counter = 1;
+            while (fs.existsSync(finalPath)) {
+                const ext = path.extname(outputFileName);
+                const base = path.basename(outputFileName, ext);
+                finalPath = path.join(outputDir, `${base}-${counter}${ext}`);
+                counter++;
+            }
+
+            fs.writeFileSync(finalPath, content, "utf-8");
+            fs.unlinkSync(filePath);
+            return { frontmatter: {}, body: "", success: true };
         }
 
         if (contentType === "image" && frontmatter.attachment) {
