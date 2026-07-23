@@ -368,7 +368,9 @@ function saveToInbox(url, content, msgId, fromUser) {
     let sourceType = "link", source = hostname;
     if (hostname.includes("bilibili.com") || hostname.includes("b23.tv")) { sourceType = "video"; source = "bilibili"; }
     else if (hostname.includes("youtube.com") || hostname.includes("youtu.be")) { sourceType = "video"; source = "youtube"; }
-    else if (hostname.includes("douyin.com") || hostname.includes("weixin.qq.com/sph")) { sourceType = "video"; source = "douyin"; }
+    else if (hostname.includes("douyin.com")) { sourceType = "video"; source = "douyin"; }
+    // 视频号：channels.weixin.qq.com 是正式域名，weixin.qq.com/sph 是旧格式
+    else if (hostname.includes("channels.weixin.qq.com") || url.includes("weixin.qq.com/sph")) { sourceType = "video"; source = "weixin-video"; }
     else if (hostname.includes("mp.weixin.qq.com")) { source = "weixin"; }
 
     const from = (fromUser || "").slice(-6);
