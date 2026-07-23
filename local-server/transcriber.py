@@ -94,12 +94,14 @@ def timestamp() -> str:
 def build_ytdlp_cmd(url: str, output_template: str) -> list[str]:
     """
     构建 yt-dlp 命令行，根据环境变量决定是否使用代理和 cookies。
+    B站和抖音只下载音频（-x --audio-format wav），YouTube下载视频后转音频。
     """
     cmd = [
         "yt-dlp",
-        "-f", "best[height<=1080]/best",
+        "-x",                    # 只提取音频，避免视频格式不可用
+        "--audio-format", "wav",
+        "--audio-quality", "0",
         "--no-playlist",
-        "--merge-output-format", "mp4",
         "-o", output_template,
         "--socket-timeout", "60",
         "--extractor-retries", "3",
