@@ -242,7 +242,6 @@ def write_to_inbox(url: str, platform: str, title: str, transcript: str) -> Path
         f'source: "{platform}"',
         f'url: "{url}"',
         f'created: "{ts}"',
-        'status: "processed"',
         "---",
     ]
     frontmatter = "\n".join(frontmatter_lines)
