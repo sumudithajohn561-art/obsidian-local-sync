@@ -298,10 +298,10 @@ _SUMMARIZE_CLEAN_RE = re.compile(r'^\[\d+\.\ds\s*-\s*\d+\.\ds\]\s*', re.MULTILIN
 _SUMMARIZE_MAX_CHARS = 12000
 
 
-def summarize(transcript_text: str, title: str) -> str | None:
+def summarize(transcript_text: str, title: str) -> dict | None:
     """
     调 Anthropic API 生成 AI 速览。
-    返回 Markdown 格式的摘要内容，失败返回 None。
+    返回 {"summary": "摘要Markdown", "keywords": ["关键词1", "关键词2", ...]}，失败返回 None。
     """
     if not ANTHROPIC_API_KEY:
         log("⚠️ 未设置 ANTHROPIC_API_KEY，跳过 AI 速览")
@@ -314,7 +314,6 @@ def summarize(transcript_text: str, title: str) -> str | None:
 
     # 截断超长文本
     if len(clean) > _SUMMARIZE_MAX_CHARS:
-        # 从开头和结尾各取一半，保留开头和结尾的完整语义
         half = _SUMMARIZE_MAX_CHARS // 2
         clean = clean[:half] + "\n\n…(中间省略)…\n\n" + clean[-half:]
 
@@ -359,7 +358,6 @@ def summarize(transcript_text: str, title: str) -> str | None:
         with urllib.request.urlopen(req, timeout=60) as resp:
             body = json.loads(resp.read().decode("utf-8"))
 
-        # 提取回复文本
         content = body.get("content", [])
         text = ""
         for block in content:
@@ -370,8 +368,19 @@ def summarize(transcript_text: str, title: str) -> str | None:
             log("⚠️ AI 速览返回为空")
             return None
 
-        log(f"✅ AI 速览生成成功 ({len(text)} 字符)")
-        return text.strip()
+        # 提取关键词行，并从摘要正文中移除
+        keywords: list[str] = []
+        keyword_re = re.compile(r'^\*?\*?关键词\*?\*?\s*[：:]\s*(.+)', re.MULTILINE)
+        keyword_match = keyword_re.search(text)
+        if keyword_match:
+            raw = keyword_match.group(1).strip()
+            # 用顿号、逗号、/ 拆分关键词
+            keywords = [k.strip() for k in re.split(r'[、,，/]', raw) if k.strip()]
+            # 从正文中移除关键词行
+            text = keyword_re.sub("", text).strip()
+
+        log(f"✅ AI 速览生成成功 ({len(text)} 字符, {len(keywords)} 个关键词)")
+        return {"summary": text.strip(), "keywords": keywords}
 
     except urllib.error.HTTPError as e:
         log(f"⚠️ AI 速览 API 错误 (HTTP {e.code}): {e.reason}")
@@ -473,10 +482,11 @@ def transcribe(audio_path: Path, model, audio_duration: float | None = None) -> 
 # 步骤 4: 写入收件箱
 # ============================================================
 
-def write_to_inbox(url: str, platform: str, title: str, transcript: str, ai_summary: str | None = None) -> Path:
+def write_to_inbox(url: str, platform: str, title: str, transcript: str, ai_summary: str | None = None, keywords: list[str] | None = None) -> Path:
     """
     生成 Markdown 笔记并写入收件箱，返回文件路径。
     ai_summary: 可选的 AI 速览内容（Markdown 格式）
+    keywords: 可选的关键词列表，写入 frontmatter tags
     """
     ts = timestamp()
     safe_title = sanitize_filename(title)
@@ -491,8 +501,12 @@ def write_to_inbox(url: str, platform: str, title: str, transcript: str, ai_summ
         f'source: "{platform}"',
         f'url: "{url}"',
         f'created: "{ts}"',
-        "---",
     ]
+    # 关键词写入 frontmatter tags
+    if keywords:
+        tags_yaml = json.dumps(keywords, ensure_ascii=False)  # ["标签1", "标签2"]
+        frontmatter_lines.append(f"tags: {tags_yaml}")
+    frontmatter_lines.append("---")
     frontmatter = "\n".join(frontmatter_lines)
 
     body_parts = [
@@ -579,10 +593,12 @@ def process_task(task: dict, model) -> dict:
             return {"taskId": task_id, "status": "error", "error": "转录结果为空"}
 
         # 步骤 4: AI 速览（可选，失败不影响主流程）
-        ai_summary = summarize(transcript_text, title)
+        ai_result = summarize(transcript_text, title)
+        ai_summary = ai_result.get("summary") if ai_result else None
+        keywords = ai_result.get("keywords") if ai_result else None
 
         # 步骤 5: 写入收件箱
-        out_file = write_to_inbox(url, platform, title, transcript_text, ai_summary)
+        out_file = write_to_inbox(url, platform, title, transcript_text, ai_summary, keywords)
 
         return {
             "taskId": task_id,
