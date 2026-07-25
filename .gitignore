@@ -11,6 +11,7 @@ obsidian-local-sync/main.js
 
 # local-server
 local-server/node_modules/
+local-server/.env
 
 # IDE
 .idea/
