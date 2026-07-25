@@ -13,6 +13,10 @@ const CAPTURE_API_KEY = process.env.CAPTURE_API_KEY || "";
 const WECHAT_TOKEN = process.env.WECHAT_TOKEN || "change-me-please";
 
 const processedMsgIds = new Set();
+let serverStartTime = Date.now();  // 服务启动时间
+let transcriberRestartCount = 0;   // 进程重启次数
+let transcriberLastStartTime = 0;  // 上次启动时间
+let watchdogTriggerCount = 0;      // 看门狗触发次数
 
 const app = express();
 
@@ -27,20 +31,41 @@ const QUEUE_FILE = path.join(INBOX, "transcript-queue.json");
 const transcriptQueue = [];
 let transcriberProc = null;
 let transcriberReady = false;
+let restartScheduled = false;  // 防止重复调度重启
 
 /** 从磁盘恢复未完成的任务 */
 function restoreQueue() {
     try {
         if (fs.existsSync(QUEUE_FILE)) {
-            const saved = JSON.parse(fs.readFileSync(QUEUE_FILE, "utf-8"));
-            if (Array.isArray(saved) && saved.length > 0) {
-                transcriptQueue.push(...saved);
-                console.log(`[transcriber] 恢复 ${saved.length} 个未完成任务`);
+            const raw = fs.readFileSync(QUEUE_FILE, "utf-8");
+            if (!raw || !raw.trim()) {
+                // 空文件 → 直接清理
+                fs.unlinkSync(QUEUE_FILE);
+                return;
             }
-            fs.unlinkSync(QUEUE_FILE);  // 读取后删除，避免重复恢复
+            const saved = JSON.parse(raw);
+            if (Array.isArray(saved) && saved.length > 0) {
+                // 重置所有任务状态（进程重新启动，旧 started 引用无效）
+                const valid = [];
+                for (const t of saved) {
+                    if (t.taskId && t.url && t.platform && !t.done) {
+                        t.started = false;
+                        delete t._startedAt;
+                        valid.push(t);
+                    }
+                }
+                if (valid.length > 0) {
+                    transcriptQueue.push(...valid);
+                    console.log(`[transcriber] ✅ 恢复 ${valid.length} 个未完成任务 (跳过 ${saved.length - valid.length} 个无效)`);
+                }
+            }
+            // 读取后删除磁盘文件，避免重复恢复
+            fs.unlinkSync(QUEUE_FILE);
         }
     } catch (e) {
         console.error("[transcriber] 队列恢复失败:", e.message);
+        // 损坏的队列文件：删除，避免永久性启动错误
+        try { if (fs.existsSync(QUEUE_FILE)) fs.unlinkSync(QUEUE_FILE); } catch {}
     }
 }
 
@@ -62,6 +87,15 @@ function persistQueue() {
  * 启动 Python 转录长驻进程
  */
 function startTranscriber() {
+    // 先杀掉旧的 Python 进程，防止多个并存导致 stdin 混乱
+    if (transcriberProc && !transcriberProc.killed) {
+        transcriberProc.stdin.end();
+        transcriberProc.kill("SIGTERM");
+        console.log("[transcriber] 终止旧进程");
+    }
+
+    transcriberRestartCount++;
+    transcriberLastStartTime = Date.now();
     const scriptPath = path.join(__dirname, "transcriber.py");
 
     // 设置环境变量给 Python 进程
@@ -70,6 +104,12 @@ function startTranscriber() {
         CAPTURE_INBOX: INBOX,
         HF_HUB_DISABLE_SYMLINKS_WARNING: "1",
         HF_ENDPOINT: "https://hf-mirror.com",
+        // 清除全局代理，B站等国内平台直连更快
+        // 如需单独为 yt-dlp 设代理，使用 YTDLP_PROXY 环境变量
+        HTTP_PROXY: "",
+        HTTPS_PROXY: "",
+        http_proxy: "",
+        https_proxy: "",
     };
 
     transcriberProc = spawn("python", [scriptPath], {
@@ -97,16 +137,35 @@ function startTranscriber() {
         process.stderr.write(data);
     });
 
-    transcriberProc.on("exit", (code) => {
-        console.log(`[transcriber] 进程退出 (code=${code})，5秒后重启...`);
+    transcriberProc.on("exit", (code, signal) => {
+        console.log(`[transcriber] 进程退出 (code=${code}, signal=${signal})`);
         transcriberReady = false;
-        setTimeout(startTranscriber, 5000);
+        transcriberProc = null;
+
+        // 防止与看门狗强杀 + 重启冲突造成双重重启
+        if (restartScheduled) return;
+
+        // 重置所有 started 任务，防止崩溃导致队列卡死
+        for (const t of transcriptQueue) { t.started = false; }
+
+        restartScheduled = true;
+        setTimeout(() => {
+            restartScheduled = false;
+            startTranscriber();
+        }, 5000);
     });
 
     transcriberProc.on("error", (err) => {
         console.error(`[transcriber] 启动失败:`, err.message);
         transcriberReady = false;
-        setTimeout(startTranscriber, 10000);
+        transcriberProc = null;
+
+        if (restartScheduled) return;
+        restartScheduled = true;
+        setTimeout(() => {
+            restartScheduled = false;
+            startTranscriber();
+        }, 10000);
     });
 }
 
@@ -128,6 +187,33 @@ function handleTranscriberResult(result) {
             console.log(`[transcriber] ✅ ${task.platform}: ${result.title} → ${result.filePath}`);
         } else {
             console.error(`[transcriber] ❌ ${task.platform}: ${result.error}`);
+            // 降级：转录失败时写 pending 笔记，保留链接不丢失
+            try {
+                const now = new Date();
+                const ts = now.toISOString().replace(/[:.]/g, "-").slice(0, 19).replace("T", "-");
+                const domain = task.platform || "unknown";
+                const fileName = `${ts}-${domain}-FAILED.md`;
+                const md = [
+                    "---",
+                    `title: "转录失败"`,
+                    `source_type: "link"`,
+                    `source: "${task.platform || "unknown"}"`,
+                    `url: "${task.url}"`,
+                    `created: "${ts}"`,
+                    `status: "failed"`,
+                    "---",
+                    "",
+                    `> ⚠️ 转录失败：${result.error}`,
+                    "",
+                    `- **链接:** ${task.url}`,
+                    `- **来源:** ${task.platform}`,
+                ].join("\n");
+                fs.mkdirSync(INBOX, { recursive: true });
+                fs.writeFileSync(path.join(INBOX, fileName), md, "utf-8");
+                console.error(`[transcriber] 📝 降级笔记已保存: ${fileName}`);
+            } catch (e2) {
+                console.error("[transcriber] 降级笔记写入失败:", e2.message);
+            }
         }
         // 任务完成，检查是否还有待处理的
         task.done = true;
@@ -168,6 +254,7 @@ function drainQueue() {
     if (!next) return;
 
     next.started = true;
+    next._startedAt = Date.now();
     const payload = JSON.stringify({
         taskId: next.taskId,
         url: next.url,
@@ -176,6 +263,82 @@ function drainQueue() {
 
     console.log(`[transcriber] 🎬 开始转录: ${next.platform}`);
     transcriberProc.stdin.write(payload);
+}
+
+/**
+ * 看门狗：检测卡死的转录任务。
+ * 每30秒检查一次，如果任务耗时超过30分钟，强杀进程 + 写降级笔记 + 自动重启。
+ * 防止 faster-whisper GPU hang 导致队列永久死锁。
+ */
+function startWatchdog() {
+    const TASK_TIMEOUT_MS = 30 * 60 * 1000;  // 30分钟超时
+
+    setInterval(() => {
+        // 只在有进程且就绪状态下检查
+        if (!transcriberProc || transcriberProc.killed) return;
+
+        const running = transcriptQueue.find(t => t.started && !t.done);
+        if (!running) return;
+
+        const elapsed = Date.now() - (running._startedAt || 0);
+        if (elapsed < TASK_TIMEOUT_MS) return;
+
+        const elapsedMin = Math.round(elapsed / 60000);
+        watchdogTriggerCount++;
+        console.error(`[watchdog] ⚠️ 任务 ${running.taskId.slice(0,8)} 已卡住 ${elapsedMin} 分钟，强制终止！`);
+
+        // 1) 写降级笔记：保留链接，避免丢失
+        try {
+            const now = new Date();
+            const ts = now.toISOString().replace(/[:.]/g, "-").slice(0, 19).replace("T", "-");
+            const domain = running.platform || "unknown";
+            const fileName = `${ts}-${domain}-TIMEOUT.md`;
+            const md = [
+                "---",
+                `title: "转录超时"`,
+                `source_type: "link"`,
+                `source: "${running.platform || "unknown"}"`,
+                `url: "${running.url}"`,
+                `created: "${ts}"`,
+                `status: "timeout"`,
+                "---",
+                "",
+                `> ⚠️ 转录耗时超过 ${elapsedMin} 分钟被看门狗终止。`,
+                "",
+                `- **链接:** ${running.url}`,
+                `- **来源:** ${running.platform}`,
+            ].join("\n");
+            fs.mkdirSync(INBOX, { recursive: true });
+            fs.writeFileSync(path.join(INBOX, fileName), md, "utf-8");
+            console.error(`[watchdog] 📝 降级笔记已保存: ${fileName}`);
+        } catch (e) {
+            console.error("[watchdog] 降级笔记写入失败:", e.message);
+        }
+
+        // 2) 移除卡死任务，重置所有 started 状态
+        const idx = transcriptQueue.indexOf(running);
+        if (idx >= 0) transcriptQueue.splice(idx, 1);
+
+        // 3) 先标记重启已调度，再强杀（防止 exit 事件再次触发重启）
+        transcriberReady = false;
+        restartScheduled = true;
+        setTimeout(() => {
+            restartScheduled = false;
+            startTranscriber();
+        }, 5000);
+
+        transcriberProc.stdin.end();
+        transcriberProc.kill("SIGKILL");  // SIGKILL 强杀僵死进程
+        transcriberProc = null;
+        console.error("[watchdog] 🔪 已强杀 Python 进程，5秒后重启...");
+
+        // 4) 重置所有 started 任务
+        for (const t of transcriptQueue) { t.started = false; }
+
+        persistQueue();
+    }, 30_000);
+
+    console.log("[watchdog] 🐕 看门狗已启动 (超时阈值: 30分钟, 检测间隔: 30秒)");
 }
 
 // ============================================================
@@ -203,13 +366,28 @@ app.use((req, res, next) => {
 // 通用接口
 // ============================================================
 
-app.get("/ping", (req, res) => res.json({
-    status: "ok",
-    inbox: INBOX,
-    version: "2.1",
-    transcriber: transcriberReady ? "ready" : (transcriberProc ? "loading" : "stopped"),
-    queueLength: transcriptQueue.length,
-}));
+app.get("/ping", (req, res) => {
+    const uptime = Math.floor((Date.now() - serverStartTime) / 1000);
+    const currentTask = transcriptQueue.find(t => t.started && !t.done);
+
+    res.json({
+        status: "ok",
+        inbox: INBOX,
+        version: "2.1",
+        uptime: `${uptime}s`,
+        transcriber: {
+            status: transcriberReady ? "ready" : (transcriberProc && !transcriberProc.killed ? "loading" : "stopped"),
+            queueLength: transcriptQueue.length,
+            currentTask: currentTask ? {
+                platform: currentTask.platform,
+                url: currentTask.url.slice(0, 80),
+                elapsed: currentTask._startedAt ? `${Math.floor((Date.now() - currentTask._startedAt) / 1000)}s` : "unknown",
+            } : null,
+            restartCount: transcriberRestartCount,
+            watchdogTriggers: watchdogTriggerCount,
+        },
+    });
+});
 
 app.post("/capture", requireApiKey, (req, res) => {
     try {
@@ -440,6 +618,9 @@ app.listen(PORT, "0.0.0.0", () => {
 
     // 启动 Python 转录进程
     startTranscriber();
+
+    // 启动看门狗
+    startWatchdog();
 });
 
 // 优雅退出

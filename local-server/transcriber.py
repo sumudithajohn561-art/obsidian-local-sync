@@ -24,9 +24,15 @@ stdout 输出格式:
 
 import json
 import os
+import re
 import sys
 import tempfile
 import site
+
+# 修复 Windows GBK 编码问题：stdout 重定向为 UTF-8
+if sys.platform == "win32":
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
 
 # 注册 NVIDIA CUDA DLL 路径（Python 3.8+ Windows 需要显式注册）
 _pkg_dir = site.getsitepackages()[1]  # Lib/site-packages
@@ -37,6 +43,7 @@ for _sub in ["cublas", "cuda_runtime", "cuda_nvrtc"]:
 import subprocess
 import shutil
 import traceback
+import threading
 from datetime import datetime
 from pathlib import Path
 
@@ -98,13 +105,15 @@ def build_ytdlp_cmd(url: str, output_template: str) -> list[str]:
     """
     cmd = [
         "yt-dlp",
-        "-x",                    # 只提取音频，避免视频格式不可用
-        "--audio-format", "wav",
-        "--audio-quality", "0",
-        "--no-playlist",
+        # B站视频格式分离，用 bv*+ba 自动合并视频+音频
+        "-f", "bv*+ba/best",
+        "--playlist-end", "10",
         "-o", output_template,
         "--socket-timeout", "60",
-        "--extractor-retries", "3",
+        "--extractor-retries", "10",
+        "--retries", "10",
+        "--fragment-retries", "10",
+        "--no-check-certificates",
     ]
 
     # 代理（可选）
@@ -125,10 +134,10 @@ def build_ytdlp_cmd(url: str, output_template: str) -> list[str]:
     return cmd
 
 
-def download_video(url: str, output_dir: Path) -> Path | None:
+def download_video(url: str, output_dir: Path) -> list[Path]:
     """
-    使用 yt-dlp 下载视频，返回视频文件路径。
-    优先 1080p 及以下画质，控制文件大小。
+    使用 yt-dlp 下载视频（支持合集多P），返回视频文件路径列表。
+    用 Popen + 实时读取输出，避免 subprocess.run+管道缓冲区死锁。
     """
     log(f"下载视频: {url}")
     output_template = str(output_dir / "%(title)s.%(ext)s")
@@ -136,47 +145,112 @@ def download_video(url: str, output_dir: Path) -> Path | None:
     cmd = build_ytdlp_cmd(url, output_template)
 
     try:
-        subprocess.run(cmd, check=True, capture_output=True, text=True, timeout=300)
-        # 找到下载的文件
-        videos = list(output_dir.glob("*"))
+        # 用 Popen 替代 subprocess.run，实时读取输出防止管道死锁
+        proc = subprocess.Popen(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,  # yt-dlp 日志输出到 stdout
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+        )
+        # 收集最近几行输出，用于错误日志
+        output_tail: list[str] = []
+        try:
+            for line in proc.stdout:
+                line = line.rstrip()
+                output_tail.append(line)
+                output_tail = output_tail[-5:]  # 只保留最后5行
+                # 过滤 yt-dlp 的进度行，只输出关键日志
+                if not line.startswith("[download]") and line.strip():
+                    log(f"  yt-dlp: {line[:120]}")
+        except Exception:
+            pass
+
+        proc.wait(timeout=600)
+
+        if proc.returncode != 0:
+            tail = "\n".join(output_tail) if output_tail else "(无输出)"
+            log(f"❌ yt-dlp 失败 (code={proc.returncode}): {tail[:300]}")
+            return []
+
+        # 找到下载的文件（排除 part 文件，按文件名排序保持P顺序）
+        videos = sorted(
+            [v for v in output_dir.glob("*") if not v.name.endswith(".part") and v.is_file()],
+            key=lambda p: p.name,
+        )
         if not videos:
             log("❌ 未找到下载文件")
-            return None
-        video_path = videos[0]
-        log(f"✅ 下载完成: {video_path.name} ({video_path.stat().st_size / 1024 / 1024:.1f} MB)")
-        return video_path
-    except subprocess.CalledProcessError as e:
-        log(f"❌ yt-dlp 失败: {e.stderr[:200] if e.stderr else e}")
-        return None
+            return []
+        total_mb = sum(v.stat().st_size for v in videos) / 1024 / 1024
+        log(f"✅ 下载完成: {len(videos)} 个视频, 共 {total_mb:.1f} MB")
+        for v in videos:
+            log(f"   {v.name} ({v.stat().st_size / 1024 / 1024:.1f} MB)")
+        return videos
     except subprocess.TimeoutExpired:
-        log("❌ yt-dlp 超时 (300s)")
-        return None
+        try: proc.kill()
+        except: pass
+        log("❌ yt-dlp 超时 (600s)")
+        return []
+    except Exception as e:
+        log(f"❌ yt-dlp 异常: {e}")
+        return []
 
 
 # ============================================================
 # 步骤 2: ffmpeg 提取音频
 # ============================================================
 
-def extract_audio(video_path: Path, output_dir: Path) -> Path | None:
+def extract_audio(video_paths: list[Path], output_dir: Path) -> Path | None:
     """
     从视频提取音频为 16kHz 单声道 WAV（Whisper 最优格式）。
+    如果有多个视频，先用 ffmpeg concat 合并后再提取。
     """
-    audio_path = output_dir / "audio.wav"
-    log(f"提取音频: {video_path.name}")
+    if not video_paths:
+        return None
 
-    cmd = [
-        "ffmpeg",
-        "-i", str(video_path),
-        "-vn",                # 不要视频流
-        "-acodec", "pcm_s16le",  # 16-bit PCM
-        "-ar", "16000",       # 16kHz 采样率
-        "-ac", "1",           # 单声道
-        "-y",                 # 覆盖已有文件
-        str(audio_path),
-    ]
+    if len(video_paths) == 1:
+        audio_path = output_dir / "audio.wav"
+        video_path = video_paths[0]
+        log(f"提取音频: {video_path.name}")
+
+        cmd = [
+            "ffmpeg",
+            "-i", str(video_path),
+            "-vn",                # 不要视频流
+            "-acodec", "pcm_s16le",  # 16-bit PCM
+            "-ar", "16000",       # 16kHz 采样率
+            "-ac", "1",           # 单声道
+            "-y",                 # 覆盖已有文件
+            str(audio_path),
+        ]
+    else:
+        # 多P视频：用 ffmpeg concat 合并
+        audio_path = output_dir / "audio.wav"
+        log(f"合并 {len(video_paths)} 个视频并提取音频...")
+
+        # 生成 concat 文件列表
+        concat_file = output_dir / "concat.txt"
+        with open(concat_file, "w", encoding="utf-8") as f:
+            for v in video_paths:
+                # ffmpeg concat 格式，路径需要转义
+                f.write(f"file '{v.as_posix()}'\n")
+
+        cmd = [
+            "ffmpeg",
+            "-f", "concat",
+            "-safe", "0",
+            "-i", str(concat_file),
+            "-vn",
+            "-acodec", "pcm_s16le",
+            "-ar", "16000",
+            "-ac", "1",
+            "-y",
+            str(audio_path),
+        ]
 
     try:
-        subprocess.run(cmd, check=True, capture_output=True, text=True, timeout=120)
+        subprocess.run(cmd, check=True, capture_output=True, text=True, timeout=600, encoding="utf-8", errors="replace")
         size_mb = audio_path.stat().st_size / 1024 / 1024
         log(f"✅ 音频提取完成: {size_mb:.1f} MB")
         return audio_path
@@ -184,7 +258,29 @@ def extract_audio(video_path: Path, output_dir: Path) -> Path | None:
         log(f"❌ ffmpeg 失败: {e.stderr[:200] if e.stderr else e}")
         return None
     except subprocess.TimeoutExpired:
-        log("❌ ffmpeg 超时 (120s)")
+        log("❌ ffmpeg 超时")
+        return None
+
+
+def get_audio_duration(audio_path: Path) -> float | None:
+    """
+    使用 ffprobe 获取音频时长（秒）。
+    返回 float 秒数，失败返回 None。
+    """
+    cmd = [
+        "ffprobe", "-v", "quiet",
+        "-show_entries", "format=duration",
+        "-of", "csv=p=0",
+        str(audio_path),
+    ]
+    try:
+        result = subprocess.run(
+            cmd, capture_output=True, text=True,
+            timeout=30, encoding="utf-8", errors="replace",
+        )
+        return float(result.stdout.strip())
+    except Exception as e:
+        log(f"  ⚠️ 无法获取音频时长: {e}")
         return None
 
 
@@ -192,35 +288,88 @@ def extract_audio(video_path: Path, output_dir: Path) -> Path | None:
 # 步骤 3: faster-whisper 转录
 # ============================================================
 
-def transcribe(audio_path: Path, model) -> tuple[str, str] | None:
+def transcribe(audio_path: Path, model, audio_duration: float | None = None) -> tuple[str, str] | None:
     """
     使用 faster-whisper 转录音频。
     返回 (完整文本, 检测到的语言)。
+
+    安全机制: 用看门狗线程防止 CUDA hang 导致进程永久僵死。
+    若转录超过 25 分钟，os._exit(1) 自毁（绕过所有清理，确保进程终止）。
     """
-    log(f"转录中: {audio_path.name}")
+    log(f"转录中: {audio_path.name}" + (f" (音频时长: {audio_duration:.0f}s)" if audio_duration else ""))
+
+    # 看门狗：25分钟内未完成 → 自毁
+    # 用 threading.Event 而不是 Timer，因为转录完成后可以取消
+    timeout_sec = 25 * 60  # 25分钟，留5分钟余量给 Node 端看门狗
+    watchdog_fired = threading.Event()
+
+    def watchdog():
+        """超时自毁：os._exit 绕过 Python 清理，直接终止进程"""
+        watchdog_fired.set()
+        log(f"❌ 转录超时 ({timeout_sec // 60} 分钟)，CUDA 可能已 hang，触发自毁...")
+        # os._exit 是原子级进程终止，不执行 finally、不调用 atexit、不清理
+        os._exit(1)
+
+    timer = threading.Timer(timeout_sec, watchdog)
+    timer.daemon = True  # 主线程退出时自动取消
+    timer.start()
+
     try:
+        log("  调用 model.transcribe()...")
         segments, info = model.transcribe(
             str(audio_path),
             language=LANGUAGE,
             beam_size=5,
-            vad_filter=True,         # 过滤静音段
-            vad_parameters=dict(
-                min_silence_duration_ms=500,
-            ),
+            # 注意：不启用 vad_filter，防止 VAD 误判静音导致转录提前终止
+            # 长视频中段落的间隔容易被 VAD 误判为"语音结束"
+            # condition_on_previous_text=False: 防止 ASR 把前文幻觉续接到下一段，
+            #   这是长视频转录"陷入循环/提前终止"的常见根因
+            condition_on_previous_text=False,
         )
+        log("  model.transcribe() 返回，开始收集分段...")
 
-        # 收集所有分段
+        # 收集所有分段，并定期输出进度
         lines: list[str] = []
+        last_progress_log = 0.0
         for segment in segments:
             lines.append(f"[{segment.start:.1f}s - {segment.end:.1f}s] {segment.text.strip()}")
+            # 每30秒报告一次进度（按转录时间戳）
+            if segment.end - last_progress_log >= 30:
+                log(f"  转录进度: {len(lines)} 段, 已到 {segment.end:.0f}s" +
+                    (f" / {audio_duration:.0f}s ({segment.end / audio_duration * 100:.0f}%)" if audio_duration else ""))
+                last_progress_log = segment.end
 
         text = "\n".join(lines)
         detected_lang = info.language
-        log(f"✅ 转录完成: {len(lines)} 段, 语言={detected_lang}, 总长={len(text)} 字符")
+
+        # 覆盖率验证
+        if lines:
+            # 从最后一行格式 "[xxx.xs - yyy.ys] ..." 中提取结束时间
+            last_seg_end = 0.0
+            try:
+                end_str = lines[-1].split(" - ")[1].split("s]")[0]
+                last_seg_end = float(end_str)
+            except (IndexError, ValueError):
+                pass
+
+            if audio_duration and audio_duration > 0:
+                coverage = last_seg_end / audio_duration * 100
+                quality = "⚠️ 异常" if coverage < 80 else ("良好" if coverage >= 95 else "偏低")
+                log(f"✅ 转录完成: {len(lines)} 段, 语言={detected_lang}, 字符={len(text)}, "
+                    f"覆盖={last_seg_end:.0f}s/{audio_duration:.0f}s={coverage:.0f}% [{quality}]")
+            else:
+                log(f"✅ 转录完成: {len(lines)} 段, 语言={detected_lang}, 字符={len(text)}, "
+                    f"结尾={last_seg_end:.0f}s (无音频时长参考)")
+        else:
+            log(f"⚠️ 转录结果为空: 语言={detected_lang}")
+
         return text, detected_lang
     except Exception as e:
         log(f"❌ 转录失败: {e}")
+        log(f"  堆栈: {traceback.format_exc()}")
         return None
+    finally:
+        timer.cancel()  # 取消看门狗（如果还没触发）
 
 
 # ============================================================
@@ -292,21 +441,24 @@ def process_task(task: dict, model) -> dict:
     log(f"  临时目录: {tmpdir}")
 
     try:
-        # 步骤 1: 下载视频
-        video_path = download_video(url, tmpdir)
-        if not video_path:
+        # 步骤 1: 下载视频（支持合集多P）
+        video_paths = download_video(url, tmpdir)
+        if not video_paths:
             return {"taskId": task_id, "status": "error", "error": "视频下载失败"}
 
-        # 提取视频标题（从文件名）
-        title = video_path.stem or "未命名视频"
+        # 提取视频标题（从第一个文件）
+        title = video_paths[0].stem or "未命名视频"
+        # 去掉 _p1 后缀（合集分P标记）
+        title = re.sub(r'_p\d+$', '', title)
 
-        # 步骤 2: 提取音频
-        audio_path = extract_audio(video_path, tmpdir)
+        # 步骤 2: 提取/合并音频
+        audio_path = extract_audio(video_paths, tmpdir)
         if not audio_path:
             return {"taskId": task_id, "status": "error", "error": "音频提取失败"}
 
-        # 步骤 3: 转录
-        result = transcribe(audio_path, model)
+        # 步骤 3: 转录（传入音频时长用于覆盖率验证）
+        audio_duration = get_audio_duration(audio_path)
+        result = transcribe(audio_path, model, audio_duration)
         if not result:
             return {"taskId": task_id, "status": "error", "error": "转录失败"}
         transcript_text, _ = result
@@ -363,6 +515,10 @@ def main():
 
     # 通知父进程：就绪
     send_json({"status": "ready"})
+    # 额外输出醒目的就绪确认到 stderr（不会被 JSON 协议影响）
+    log("=" * 50)
+    log("✅✅✅ 转录服务已就绪，开始处理队列 ✅✅✅")
+    log("=" * 50)
 
     # 主循环：逐行读取 stdin
     for line in sys.stdin:
