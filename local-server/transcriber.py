@@ -28,6 +28,8 @@ import re
 import sys
 import tempfile
 import site
+import urllib.request
+import urllib.error
 
 # 修复 Windows GBK 编码问题：stdout 重定向为 UTF-8
 if sys.platform == "win32":
@@ -60,6 +62,8 @@ LANGUAGE = "zh"
 PROXY = os.environ.get("YTDLP_PROXY", "")          # yt-dlp 代理，不设则直连
 COOKIES_FILE = os.environ.get("YTDLP_COOKIES_FILE", "")  # Netscape格式cookie文件路径
 COOKIES_BROWSER = os.environ.get("YTDLP_COOKIES_BROWSER", "")  # 浏览器名称
+ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")    # Claude API 密钥（用于 AI 速览）
+SUMMARIZE_MODEL = "claude-haiku-4-5-20251001"  # 轻量模型，快速便宜
 
 
 # ============================================================
@@ -285,6 +289,99 @@ def get_audio_duration(audio_path: Path) -> float | None:
 
 
 # ============================================================
+# 步骤 2.5: AI 速览（Anthropic API）
+# ============================================================
+
+# 用于提取纯文本的预编译正则（去掉时间戳标记）
+_SUMMARIZE_CLEAN_RE = re.compile(r'^\[\d+\.\ds\s*-\s*\d+\.\ds\]\s*', re.MULTILINE)
+# 摘要最大输入 token 数（haiku 上下文窗口远大于此，但为省钱和速度做截断）
+_SUMMARIZE_MAX_CHARS = 12000
+
+
+def summarize(transcript_text: str, title: str) -> str | None:
+    """
+    调 Anthropic API 生成 AI 速览。
+    返回 Markdown 格式的摘要内容，失败返回 None。
+    """
+    if not ANTHROPIC_API_KEY:
+        log("⚠️ 未设置 ANTHROPIC_API_KEY，跳过 AI 速览")
+        return None
+
+    # 清理转录文本：去掉时间戳，只留正文
+    clean = _SUMMARIZE_CLEAN_RE.sub("", transcript_text).strip()
+    if not clean:
+        return None
+
+    # 截断超长文本
+    if len(clean) > _SUMMARIZE_MAX_CHARS:
+        # 从开头和结尾各取一半，保留开头和结尾的完整语义
+        half = _SUMMARIZE_MAX_CHARS // 2
+        clean = clean[:half] + "\n\n…(中间省略)…\n\n" + clean[-half:]
+
+    prompt = f"""你是一个视频内容摘要助手。请根据以下视频转录文本，生成结构化的"AI 速览"。
+
+视频标题：{title}
+
+转录文本：
+{clean}
+
+请按以下格式输出（Markdown），不要输出其他内容：
+
+**一句话**：（15-30字概括这期视频的核心内容）
+
+**核心要点**：
+- （要点1）
+- （要点2）
+- （要点3）
+- （如有更多可用要点可继续列出，3-5条为宜）
+
+**关键词**：（3-6个关键词/标签，用中文顿号分隔）"""
+
+    try:
+        req = urllib.request.Request(
+            "https://api.anthropic.com/v1/messages",
+            data=json.dumps({
+                "model": SUMMARIZE_MODEL,
+                "max_tokens": 500,
+                "temperature": 0.3,
+                "system": "你是一个专业的中文视频内容摘要助手。输出简洁、准确、有洞察力。只输出要求的格式，不要额外说明。",
+                "messages": [
+                    {"role": "user", "content": prompt}
+                ],
+            }).encode("utf-8"),
+            headers={
+                "Content-Type": "application/json",
+                "x-api-key": ANTHROPIC_API_KEY,
+                "anthropic-version": "2023-06-01",
+            },
+        )
+
+        with urllib.request.urlopen(req, timeout=60) as resp:
+            body = json.loads(resp.read().decode("utf-8"))
+
+        # 提取回复文本
+        content = body.get("content", [])
+        text = ""
+        for block in content:
+            if block.get("type") == "text":
+                text += block.get("text", "")
+
+        if not text.strip():
+            log("⚠️ AI 速览返回为空")
+            return None
+
+        log(f"✅ AI 速览生成成功 ({len(text)} 字符)")
+        return text.strip()
+
+    except urllib.error.HTTPError as e:
+        log(f"⚠️ AI 速览 API 错误 (HTTP {e.code}): {e.reason}")
+        return None
+    except Exception as e:
+        log(f"⚠️ AI 速览失败: {e}")
+        return None
+
+
+# ============================================================
 # 步骤 3: faster-whisper 转录
 # ============================================================
 
@@ -376,9 +473,10 @@ def transcribe(audio_path: Path, model, audio_duration: float | None = None) -> 
 # 步骤 4: 写入收件箱
 # ============================================================
 
-def write_to_inbox(url: str, platform: str, title: str, transcript: str) -> Path:
+def write_to_inbox(url: str, platform: str, title: str, transcript: str, ai_summary: str | None = None) -> Path:
     """
     生成 Markdown 笔记并写入收件箱，返回文件路径。
+    ai_summary: 可选的 AI 速览内容（Markdown 格式）
     """
     ts = timestamp()
     safe_title = sanitize_filename(title)
@@ -405,6 +503,20 @@ def write_to_inbox(url: str, platform: str, title: str, transcript: str) -> Path
         f"- **链接:** {url}",
         "",
         "---",
+    ]
+
+    # 插入 AI 速览（如果有）
+    if ai_summary:
+        body_parts += [
+            "",
+            "## AI 速览",
+            "",
+            ai_summary,
+            "",
+            "---",
+        ]
+
+    body_parts += [
         "",
         "## 转录内容",
         "",
@@ -466,8 +578,11 @@ def process_task(task: dict, model) -> dict:
         if not transcript_text.strip():
             return {"taskId": task_id, "status": "error", "error": "转录结果为空"}
 
-        # 步骤 4: 写入收件箱
-        out_file = write_to_inbox(url, platform, title, transcript_text)
+        # 步骤 4: AI 速览（可选，失败不影响主流程）
+        ai_summary = summarize(transcript_text, title)
+
+        # 步骤 5: 写入收件箱
+        out_file = write_to_inbox(url, platform, title, transcript_text, ai_summary)
 
         return {
             "taskId": task_id,
