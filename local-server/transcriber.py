@@ -62,8 +62,8 @@ LANGUAGE = "zh"
 PROXY = os.environ.get("YTDLP_PROXY", "")          # yt-dlp 代理，不设则直连
 COOKIES_FILE = os.environ.get("YTDLP_COOKIES_FILE", "")  # Netscape格式cookie文件路径
 COOKIES_BROWSER = os.environ.get("YTDLP_COOKIES_BROWSER", "")  # 浏览器名称
-ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")    # Claude API 密钥（用于 AI 速览）
-SUMMARIZE_MODEL = "claude-haiku-4-5-20251001"  # 轻量模型，快速便宜
+DEEPSEEK_API_KEY = os.environ.get("DEEPSEEK_API_KEY", "")    # DeepSeek API 密钥（用于 AI 速览）
+SUMMARIZE_MODEL = "deepseek-chat"  # DeepSeek-V3
 
 
 # ============================================================
@@ -289,7 +289,7 @@ def get_audio_duration(audio_path: Path) -> float | None:
 
 
 # ============================================================
-# 步骤 2.5: AI 速览（Anthropic API）
+# 步骤 2.5: AI 速览（DeepSeek API）
 # ============================================================
 
 # 用于提取纯文本的预编译正则（去掉时间戳标记）
@@ -300,11 +300,11 @@ _SUMMARIZE_MAX_CHARS = 12000
 
 def summarize(transcript_text: str, title: str) -> dict | None:
     """
-    调 Anthropic API 生成 AI 速览。
+    调 DeepSeek API 生成 AI 速览。
     返回 {"summary": "摘要Markdown", "keywords": ["关键词1", "关键词2", ...]}，失败返回 None。
     """
-    if not ANTHROPIC_API_KEY:
-        log("⚠️ 未设置 ANTHROPIC_API_KEY，跳过 AI 速览")
+    if not DEEPSEEK_API_KEY:
+        log("⚠️ 未设置 DEEPSEEK_API_KEY，跳过 AI 速览")
         return None
 
     # 清理转录文本：去掉时间戳，只留正文
@@ -342,31 +342,31 @@ def summarize(transcript_text: str, title: str) -> dict | None:
 
     try:
         req = urllib.request.Request(
-            "https://api.anthropic.com/v1/messages",
+            "https://api.deepseek.com/v1/chat/completions",
             data=json.dumps({
                 "model": SUMMARIZE_MODEL,
-                "max_tokens": 500,
+                "max_tokens": 800,
                 "temperature": 0.3,
-                "system": "你是一个专业的中文视频内容摘要助手。输出简洁、准确、有洞察力。只输出要求的格式，不要额外说明。",
                 "messages": [
+                    {"role": "system", "content": "你是一个专业的中文视频内容摘要助手。输出简洁、准确、有洞察力。只输出要求的格式，不要额外说明。"},
                     {"role": "user", "content": prompt}
                 ],
             }).encode("utf-8"),
             headers={
                 "Content-Type": "application/json",
-                "x-api-key": ANTHROPIC_API_KEY,
-                "anthropic-version": "2023-06-01",
+                "Authorization": f"Bearer {DEEPSEEK_API_KEY}",
             },
         )
 
-        with urllib.request.urlopen(req, timeout=60) as resp:
+        with urllib.request.urlopen(req, timeout=120) as resp:
             body = json.loads(resp.read().decode("utf-8"))
 
-        content = body.get("content", [])
-        text = ""
-        for block in content:
-            if block.get("type") == "text":
-                text += block.get("text", "")
+        # DeepSeek 返回格式：choices[0].message.content
+        choices = body.get("choices", [])
+        if not choices:
+            log("⚠️ AI 速览返回为空")
+            return None
+        text = choices[0].get("message", {}).get("content", "")
 
         if not text.strip():
             log("⚠️ AI 速览返回为空")
