@@ -63,7 +63,7 @@ PROXY = os.environ.get("YTDLP_PROXY", "")          # yt-dlp 代理，不设则�
 COOKIES_FILE = os.environ.get("YTDLP_COOKIES_FILE", "")  # Netscape格式cookie文件路径
 COOKIES_BROWSER = os.environ.get("YTDLP_COOKIES_BROWSER", "")  # 浏览器名称
 DEEPSEEK_API_KEY = os.environ.get("DEEPSEEK_API_KEY", "")    # DeepSeek API 密钥（用于 AI 速览）
-SUMMARIZE_MODEL = "deepseek-chat"  # DeepSeek-V3
+SUMMARIZE_MODEL = "deepseek-v4-flash"  # DeepSeek V4 Flash（快速便宜）
 
 
 # ============================================================
