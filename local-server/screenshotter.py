@@ -58,8 +58,7 @@ for _td in _TESSDATA_CANDIDATES:
         os.environ["TESSDATA_PREFIX"] = _td
         break
 
-SCENE_THRESHOLD = 0.25         # ffmpeg scene 检测阈值 (0-1)，0.25适合PPT/教学类微
-弱切换
+SCENE_THRESHOLD = 0.25         # ffmpeg scene 检测阈值 (0-1)，0.25适合PPT/教学类微弱切换
 PHASH_HAMMING = 12             # phash 去重 Hamming 距离阈值
 MAX_CANDIDATE_FRAMES = 80      # 去重后最多保留候选帧
 TOP_N_SCORES = 25              # 最终保留评分最高的帧数
@@ -67,6 +66,44 @@ SCREENSHOT_MAX = 20            # 单个视频截图硬上限
 FRAME_SCALE_WIDTH = 1280       # 候选帧缩放宽度（减少计算负担）
 FACE_RATIO_THRESHOLD = 0.3     # 人脸占画面宽度比例超过此值 → 扣分
 FACE_DOMINANT_RATIO = 0.8      # 候选帧中人脸主导比例超过此值 → 全视频不截图
+
+# OpenCV Haar Cascade 人脸检测器（懒加载）
+_FACE_CASCADE = None
+
+
+def _face_penalty(img_bgr: np.ndarray) -> float:
+    """
+    人脸惩罚系数：画面中人脸越大/越多 → 惩罚越大。
+    返回 0（完美，无人脸）到 1（全是人脸）的惩罚值。
+    """
+    global _FACE_CASCADE
+    if _FACE_CASCADE is None:
+        _FACE_CASCADE = cv2.CascadeClassifier(
+            cv2.data.haarcascades + "haarcascade_frontalface_default.xml"
+        )
+
+    gray = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2GRAY)
+    faces = _FACE_CASCADE.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=5, minSize=(60, 60))
+
+    if len(faces) == 0:
+        return 0.0
+
+    # 计算所有人脸占画面总宽度的比例
+    img_w = img_bgr.shape[1]
+    total_face_w = sum(w for (x, y, w, h) in faces)
+    ratio = min(total_face_w / img_w, 1.0)
+    return ratio
+
+
+def _is_face_dominant(face_penalties: list[float]) -> bool:
+    """
+    判断整个视频是否被人脸主导。
+    如果超过阈值比例的候选帧人脸惩罚很高 → 全视频人脸视频 → 不截图。
+    """
+    if not face_penalties:
+        return False
+    dominant_count = sum(1 for p in face_penalties if p > FACE_RATIO_THRESHOLD)
+    return (dominant_count / len(face_penalties)) > FACE_DOMINANT_RATIO
 
 # OpenCV Haar Cascade 人脸检测器（懒加载）
 _FACE_CASCADE = None
