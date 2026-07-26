@@ -92,8 +92,8 @@ def send_json(data: dict) -> None:
 
 
 def sanitize_filename(name: str, max_len: int = 60) -> str:
-    """清理文件名，移除非法字符"""
-    illegal = r'[/\\:*?"<>|]'
+    """清理文件名，移除非法字符和 Obsidian 冲突字符"""
+    illegal = r'[/\\:*?"<>|#]'
     for ch in illegal:
         name = name.replace(ch, "-")
     return name.strip()[:max_len]
