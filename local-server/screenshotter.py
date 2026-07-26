@@ -222,6 +222,10 @@ def score_frames(frames: list[Path], weights: dict | None = None) -> list[dict]:
     if weights is None:
         weights = SCORE_WEIGHTS
 
+    # 批量获取时间戳，避免逐帧调用 ffprobe
+    frame_dir = frames[0].parent if frames else None
+    timestamps = _get_frame_timestamps(frame_dir) if frame_dir else {}
+
     results = []
     for i, fp in enumerate(frames):
         try:
@@ -236,8 +240,8 @@ def score_frames(frames: list[Path], weights: dict | None = None) -> list[dict]:
                          weights["text"] * text_s +
                          weights["color"] * color_s)
 
-            # 从文件名提取帧序号（用于估算时间戳）
-            ts = _extract_timestamp_from_frame(fp)
+            # 从批量 ffprobe 结果获取精确时间戳
+            ts = timestamps.get(fp.name, 0.0)
 
             results.append({
                 "path": fp,
@@ -260,37 +264,53 @@ def score_frames(frames: list[Path], weights: dict | None = None) -> list[dict]:
     return results
 
 
-def _extract_timestamp_from_frame(frame_path: Path) -> float:
+def _get_frame_timestamps(frame_dir: Path) -> dict[str, float]:
     """
-    从 scene_%04d.jpg 文件名反推时间戳。
-    ffmpeg -frame_pts 1 输出的文件名实际不包含 PTS 信息，
-    这里用帧序号 × 平均帧间隔做近似估算（场景检测帧来自视频全程）。
-    更精确的方案是解析 ffprobe 输出，但这一步已可定位到秒级精度。
+    用 ffprobe 批量获取所有场景帧的 PTS 时间戳。
+    返回 {filename: timestamp_sec} 映射。
+    仅在处理所有帧之前调用一次，避免逐帧调用 ffprobe 的开销。
     """
-    match = re.search(r'scene_(\d+)', frame_path.stem)
-    if match:
-        return float(match.group(1))  # 帧序号作为近似标识
-    return 0.0
+    timestamps = {}
+    cmd = [
+        "ffprobe", "-v", "quiet",
+        "-show_entries", "frame=pts_time",
+        "-of", "csv=p=0",
+        str(frame_dir / "scene_%04d.jpg"),
+    ]
+    try:
+        result = subprocess.run(
+            cmd, capture_output=True, text=True,
+            timeout=30, encoding="utf-8", errors="replace",
+        )
+        lines = result.stdout.strip().split("\n")
+        frames = sorted(frame_dir.glob("scene_*.jpg"), key=lambda p: p.name)
+        for i, line in enumerate(lines):
+            line = line.strip()
+            if line and line.replace(".", "").replace("-", "").isdigit():
+                if i < len(frames):
+                    timestamps[frames[i].name] = float(line)
+    except Exception as e:
+        log(f"  ⚠️ ffprobe 批量时间戳提取失败: {e}")
+    return timestamps
 
 
 # ============================================================
 # 步骤 4: 原分辨率截图
 # ============================================================
 
-def capture_hires(video_path: Path, frame_path: Path, output_dir: Path,
+def capture_hires(video_path: Path, timestamp_sec: float, output_dir: Path,
                   frame_index: int) -> Path | None:
     """
     从原视频指定时间点提取原分辨率截图。
-    用帧序号近似定位（ffmpeg select 场景帧时间戳）。
+    用 ffmpeg -ss 精确定位时间戳。
     """
     output_dir.mkdir(parents=True, exist_ok=True)
-    ts_file = str(frame_path)
     out_file = output_dir / f"screenshot_{frame_index:03d}.jpg"
 
     cmd = [
         "ffmpeg",
+        "-ss", str(timestamp_sec),
         "-i", str(video_path),
-        "-vf", f"select=eq(n\\,{int(_extract_timestamp_from_frame(frame_path))})",
         "-vframes", "1",
         "-q:v", "3",
         "-y",
@@ -362,9 +382,9 @@ def extract_screenshots(
                 if sf["score"] < 0.05:  # 极低分不截图
                     continue
 
-                hi_path = capture_hires(video_path, sf["path"], output_dir, len(screenshots))
+                # 直接使用 score_frames() 中已经计算好的精确时间戳
+                hi_path = capture_hires(video_path, sf["timestamp_sec"], output_dir, len(screenshots))
                 if hi_path:
-                    # 从场景帧路径估算时间戳
                     ts = sf["timestamp_sec"] + cumulative_offset
 
                     screenshots.append({

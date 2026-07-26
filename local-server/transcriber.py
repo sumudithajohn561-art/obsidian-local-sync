@@ -388,33 +388,51 @@ def summarize(transcript_text: str, title: str) -> dict | None:
 
 **关键词**：（3-6个关键词/标签，用中文顿号分隔）"""
 
-    try:
-        req = urllib.request.Request(
-            "https://api.deepseek.com/v1/chat/completions",
-            data=json.dumps({
-                "model": SUMMARIZE_MODEL,
-                "max_tokens": 800,
-                "temperature": 0.3,
-                "messages": [
-                    {"role": "system", "content": "你是一个专业的中文视频内容摘要助手。输出简洁、准确、有洞察力。只输出要求的格式，不要额外说明。"},
-                    {"role": "user", "content": prompt}
-                ],
-            }).encode("utf-8"),
-            headers={
-                "Content-Type": "application/json",
-                "Authorization": f"Bearer {DEEPSEEK_API_KEY}",
-            },
-        )
+    for attempt in range(3):
+        try:
+            req = urllib.request.Request(
+                "https://api.deepseek.com/v1/chat/completions",
+                data=json.dumps({
+                    "model": SUMMARIZE_MODEL,
+                    "max_tokens": 800,
+                    "temperature": 0.3,
+                    "messages": [
+                        {"role": "system", "content": "你是一个专业的中文视频内容摘要助手。输出简洁、准确、有洞察力。只输出要求的格式，不要额外说明。"},
+                        {"role": "user", "content": prompt}
+                    ],
+                }).encode("utf-8"),
+                headers={
+                    "Content-Type": "application/json",
+                    "Authorization": f"Bearer {DEEPSEEK_API_KEY}",
+                },
+            )
 
-        with urllib.request.urlopen(req, timeout=120) as resp:
-            body = json.loads(resp.read().decode("utf-8"))
+            with urllib.request.urlopen(req, timeout=120) as resp:
+                body = json.loads(resp.read().decode("utf-8"))
 
-        # DeepSeek 返回格式：choices[0].message.content
-        choices = body.get("choices", [])
-        if not choices:
-            log("⚠️ AI 速览返回为空")
+            # DeepSeek 返回格式：choices[0].message.content
+            choices = body.get("choices", [])
+            if not choices:
+                log("⚠️ AI 速览返回为空")
+                return None
+            text = choices[0].get("message", {}).get("content", "")
+            break  # 成功，跳出重试循环
+
+        except urllib.error.HTTPError as e:
+            log(f"⚠️ AI 速览 API 错误 (HTTP {e.code}, 第{attempt+1}次): {e.reason}")
+            if e.code in (429, 500, 502, 503, 504):
+                if attempt < 2:
+                    import time as _time
+                    _time.sleep(2 ** attempt)
+                    continue
             return None
-        text = choices[0].get("message", {}).get("content", "")
+        except Exception as e:
+            if attempt < 2 and ("Remote end closed" in str(e) or "timeout" in str(e).lower()):
+                log(f"⚠️ AI 速览超时 (第{attempt+1}次)，重试中...")
+                import time as _time
+                _time.sleep(3)
+                continue
+            raise
 
         if not text.strip():
             log("⚠️ AI 速览返回为空")
@@ -433,13 +451,6 @@ def summarize(transcript_text: str, title: str) -> dict | None:
 
         log(f"✅ AI 速览生成成功 ({len(text)} 字符, {len(keywords)} 个关键词)")
         return {"summary": text.strip(), "keywords": keywords}
-
-    except urllib.error.HTTPError as e:
-        log(f"⚠️ AI 速览 API 错误 (HTTP {e.code}): {e.reason}")
-        return None
-    except Exception as e:
-        log(f"⚠️ AI 速览失败: {e}")
-        return None
 
 
 # ============================================================
