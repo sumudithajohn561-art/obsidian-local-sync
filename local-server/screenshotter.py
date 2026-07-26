@@ -104,10 +104,10 @@ def _get_video_duration(video_path: Path) -> float:
 # 步骤 1: ffmpeg 场景切换检测
 # ============================================================
 
-def detect_scenes(video_path: Path, output_dir: Path) -> list[Path]:
+def detect_scenes(video_path: Path, output_dir: Path) -> tuple[list[Path], dict[str, float]]:
     """
-    使用 ffmpeg select 滤镜提取场景变化帧。
-    返回候选帧文件路径列表。
+    使用 ffmpeg select 滤镜提取场景变化帧，同时从 stderr 解析 PTS 时间戳。
+    返回 (帧文件路径列表, {文件名: PTS秒数} 映射)。
     """
     log(f"场景检测: {video_path.name}")
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -116,28 +116,35 @@ def detect_scenes(video_path: Path, output_dir: Path) -> list[Path]:
     cmd = [
         "ffmpeg",
         "-i", str(video_path),
-        "-vf", f"select=gt(scene\\,{SCENE_THRESHOLD}),scale={FRAME_SCALE_WIDTH}:-1",
+        "-vf", f"select=gt(scene\\,{SCENE_THRESHOLD}),showinfo,scale={FRAME_SCALE_WIDTH}:-1",
         "-vsync", "vfr",
         "-qscale:v", "5",
-        "-frame_pts", "1",
-        "-frames:v", "300",  # 安全上限
+        "-frames:v", "300",
         "-y",
         output_template,
     ]
 
+    timestamps: dict[str, float] = {}
     try:
-        subprocess.run(cmd, check=True, capture_output=True, text=True,
-                       timeout=300, encoding="utf-8", errors="replace")
+        result = subprocess.run(cmd, check=True, capture_output=True, text=True,
+                                timeout=300, encoding="utf-8", errors="replace")
+        # 从 stderr 中解析 showinfo 输出的 pts_time
+        # 格式: [Parsed_showinfo_1 @ ...] n:0 pts:0 pts_time:0.000000 ...
+        for line in result.stderr.split("\n"):
+            m = re.search(r'pts_time:([\d.]+)', line)
+            if m:
+                idx = len(timestamps)
+                timestamps[f"scene_{idx + 1:04d}.jpg"] = float(m.group(1))
     except subprocess.CalledProcessError as e:
         log(f"⚠️ 场景检测失败: {e.stderr[:200] if e.stderr else e}")
-        return []
+        return [], {}
     except subprocess.TimeoutExpired:
         log("⚠️ 场景检测超时")
-        return []
+        return [], {}
 
     frames = sorted(output_dir.glob("scene_*.jpg"))
-    log(f"  场景检测完成: {len(frames)} 帧")
-    return frames
+    log(f"  场景检测完成: {len(frames)} 帧, {len(timestamps)} 个时间戳")
+    return frames, timestamps
 
 
 # ============================================================
@@ -213,18 +220,17 @@ def _color_entropy(img_bgr: np.ndarray) -> float:
     return min(entropy / 8.0, 1.0)
 
 
-def score_frames(frames: list[Path], weights: dict | None = None) -> list[dict]:
+def score_frames(frames: list[Path], frame_timestamps: dict[str, float] | None = None,
+                 weights: dict | None = None) -> list[dict]:
     """
     对帧列表进行启发式评分。
-    返回 [{"path": Path, "timestamp_sec": float, "score": float, "edge": float, "text": float, "color": float}, ...]
-    按 score 降序排列。
+    frame_timestamps: {文件名: PTS秒数}，从 detect_scenes() 返回
+    返回 [{"path": Path, "timestamp_sec": float, "score": float, ...}, ...]
     """
     if weights is None:
         weights = SCORE_WEIGHTS
-
-    # 批量获取时间戳，避免逐帧调用 ffprobe
-    frame_dir = frames[0].parent if frames else None
-    timestamps = _get_frame_timestamps(frame_dir) if frame_dir else {}
+    if frame_timestamps is None:
+        frame_timestamps = {}
 
     results = []
     for i, fp in enumerate(frames):
@@ -240,8 +246,8 @@ def score_frames(frames: list[Path], weights: dict | None = None) -> list[dict]:
                          weights["text"] * text_s +
                          weights["color"] * color_s)
 
-            # 从批量 ffprobe 结果获取精确时间戳
-            ts = timestamps.get(fp.name, 0.0)
+            # 从 detect_scenes() 返回的时间戳映射中获取精确时间戳
+            ts = frame_timestamps.get(fp.name, 0.0)
 
             results.append({
                 "path": fp,
@@ -359,9 +365,9 @@ def extract_screenshots(
         for vid_idx, (video_path, duration) in enumerate(zip(video_paths, all_video_durations)):
             log(f"处理视频 {vid_idx + 1}/{len(video_paths)}: {video_path.name}")
 
-            # Step 1: 场景检测
+            # Step 1: 场景检测（返回帧列表 + 时间戳映射）
             scene_dir = video_path.parent / f"scenes_{vid_idx}"
-            frames = detect_scenes(video_path, scene_dir)
+            frames, frame_timestamps = detect_scenes(video_path, scene_dir)
             if not frames:
                 log("  ⚠️ 无场景帧，跳过该视频")
                 cumulative_offset += duration
@@ -370,8 +376,8 @@ def extract_screenshots(
             # Step 2: phash 去重
             unique_frames = deduplicate_by_phash(frames)
 
-            # Step 3: 评分
-            scored = score_frames(unique_frames)
+            # Step 3: 评分（直接使用 detect_scenes 返回的时间戳）
+            scored = score_frames(unique_frames, frame_timestamps)
             if not scored:
                 cumulative_offset += duration
                 continue
