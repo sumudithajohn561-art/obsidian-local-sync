@@ -58,18 +58,60 @@ for _td in _TESSDATA_CANDIDATES:
         os.environ["TESSDATA_PREFIX"] = _td
         break
 
-SCENE_THRESHOLD = 0.4          # ffmpeg scene 检测阈值 (0-1)
+SCENE_THRESHOLD = 0.25         # ffmpeg scene 检测阈值 (0-1)，0.25适合PPT/教学类微
+弱切换
 PHASH_HAMMING = 12             # phash 去重 Hamming 距离阈值
 MAX_CANDIDATE_FRAMES = 80      # 去重后最多保留候选帧
 TOP_N_SCORES = 25              # 最终保留评分最高的帧数
 SCREENSHOT_MAX = 20            # 单个视频截图硬上限
 FRAME_SCALE_WIDTH = 1280       # 候选帧缩放宽度（减少计算负担）
+FACE_RATIO_THRESHOLD = 0.3     # 人脸占画面宽度比例超过此值 → 扣分
+FACE_DOMINANT_RATIO = 0.8      # 候选帧中人脸主导比例超过此值 → 全视频不截图
 
-# 评分权重（教学类 vs 知识类，差异不大，可用通用权重）
+# OpenCV Haar Cascade 人脸检测器（懒加载）
+_FACE_CASCADE = None
+
+def _face_penalty(img_bgr: np.ndarray) -> float:
+    """
+    人脸惩罚系数：画面中人脸越大/越多 → 惩罚越大。
+    返回 0（完美，无人脸）到 1（全是人脸）的惩罚值。
+    单人讲话视频中，大部分帧的人脸惩罚接近 0.8-1.0。
+    """
+    global _FACE_CASCADE
+    if _FACE_CASCADE is None:
+        _FACE_CASCADE = cv2.CascadeClassifier(
+            cv2.data.haarcascades + "haarcascade_frontalface_default.xml"
+        )
+
+    gray = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2GRAY)
+    faces = _FACE_CASCADE.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=5, minSize=(60, 60))
+
+    if len(faces) == 0:
+        return 0.0
+
+    # 计算所有人脸占画面总宽度的比例
+    img_w = img_bgr.shape[1]
+    total_face_w = sum(w for (x, y, w, h) in faces)
+    ratio = min(total_face_w / img_w, 1.0)
+    return ratio
+
+
+def _is_face_dominant(face_penalties: list[float]) -> bool:
+    """
+    判断整个视频是否被人脸主导。
+    如果超过阈值比例的候选帧人脸惩罚很高 → 全视频人脸视频 → 不截图。
+    """
+    if not face_penalties:
+        return False
+    dominant_count = sum(1 for p in face_penalties if p > FACE_RATIO_THRESHOLD)
+    return (dominant_count / len(face_penalties)) > FACE_DOMINANT_RATIO
+
+# 评分权重
 SCORE_WEIGHTS = {
-    "edge": 0.40,
-    "text": 0.35,
-    "color": 0.25,
+    "edge": 0.35,
+    "text": 0.30,
+    "color": 0.15,
+    "face": 0.20,    # 人脸惩罚（负向：人脸越大分越低，1 - face_penalty）
 }
 
 
@@ -233,6 +275,7 @@ def score_frames(frames: list[Path], frame_timestamps: dict[str, float] | None =
         frame_timestamps = {}
 
     results = []
+    face_penalties = []  # 收集所有人脸惩罚值，用于全视频人脸判断
     for i, fp in enumerate(frames):
         try:
             img = cv2.imread(str(fp))
@@ -242,9 +285,13 @@ def score_frames(frames: list[Path], frame_timestamps: dict[str, float] | None =
             edge_s = _edge_density(img)
             text_s = _text_density(img)
             color_s = _color_entropy(img)
+            face_p = _face_penalty(img)
+            face_penalties.append(face_p)
+            # 人脸越大 → 得分越低（1 - face_penalty 作为正向得分）
             composite = (weights["edge"] * edge_s +
                          weights["text"] * text_s +
-                         weights["color"] * color_s)
+                         weights["color"] * color_s +
+                         weights["face"] * (1.0 - face_p))
 
             # 从 detect_scenes() 返回的时间戳映射中获取精确时间戳
             ts = frame_timestamps.get(fp.name, 0.0)
@@ -256,6 +303,7 @@ def score_frames(frames: list[Path], frame_timestamps: dict[str, float] | None =
                 "edge": round(edge_s, 4),
                 "text": round(text_s, 4),
                 "color": round(color_s, 4),
+                "face": round(face_p, 4),
             })
         except Exception as e:
             log(f"  ⚠️ 评分失败 {fp.name}: {e}")
@@ -264,9 +312,18 @@ def score_frames(frames: list[Path], frame_timestamps: dict[str, float] | None =
         if (i + 1) % 20 == 0:
             log(f"  评分进度: {i + 1}/{len(frames)}")
 
+    # 全视频人脸判断：超过阈值 → 不截图
+    if _is_face_dominant(face_penalties):
+        log(f"  ⚠️ 人脸主导视频（{sum(1 for p in face_penalties if p > FACE_RATIO_THRESHOLD)}/{len(face_penalties)} 帧人脸 > {FACE_RATIO_THRESHOLD}），跳过截图")
+
     results.sort(key=lambda r: r["score"], reverse=True)
     log(f"  评分完成: {len(results)} 帧有效, top-5 分数: " +
         ", ".join(f"{r['score']:.2f}" for r in results[:5]))
+
+    # 人脸主导 → 返回空列表（外层会跳过截图）
+    if _is_face_dominant(face_penalties):
+        return []
+
     return results
 
 
