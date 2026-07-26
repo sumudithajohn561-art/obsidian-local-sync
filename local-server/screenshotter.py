@@ -64,8 +64,8 @@ MAX_CANDIDATE_FRAMES = 80      # 去重后最多保留候选帧
 TOP_N_SCORES = 25              # 最终保留评分最高的帧数
 SCREENSHOT_MAX = 20            # 单个视频截图硬上限
 FRAME_SCALE_WIDTH = 1280       # 候选帧缩放宽度（减少计算负担）
-FACE_RATIO_THRESHOLD = 0.3     # 人脸占画面宽度比例超过此值 → 扣分
-FACE_DOMINANT_RATIO = 0.8      # 候选帧中人脸主导比例超过此值 → 全视频不截图
+FACE_RATIO_THRESHOLD = 0.15    # 人脸占画面宽度比例超过此值 → 扣分
+FACE_DOMINANT_RATIO = 0.55    # 候选帧中人脸主导比例超过此值 → 全视频不截图
 
 # OpenCV Haar Cascade 人脸检测器（懒加载）
 _FACE_CASCADE = None
