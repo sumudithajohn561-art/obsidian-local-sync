@@ -266,31 +266,35 @@ def score_frames(frames: list[Path], weights: dict | None = None) -> list[dict]:
 
 def _get_frame_timestamps(frame_dir: Path) -> dict[str, float]:
     """
-    用 ffprobe 批量获取所有场景帧的 PTS 时间戳。
+    用 ffprobe 批量获取任意图片文件的 PTS 时间戳。
+    逐个文件探测，避免通配符在 Windows 上不工作。
     返回 {filename: timestamp_sec} 映射。
-    仅在处理所有帧之前调用一次，避免逐帧调用 ffprobe 的开销。
     """
     timestamps = {}
-    cmd = [
-        "ffprobe", "-v", "quiet",
-        "-show_entries", "frame=pts_time",
-        "-of", "csv=p=0",
-        str(frame_dir / "scene_%04d.jpg"),
-    ]
-    try:
-        result = subprocess.run(
-            cmd, capture_output=True, text=True,
-            timeout=30, encoding="utf-8", errors="replace",
-        )
-        lines = result.stdout.strip().split("\n")
-        frames = sorted(frame_dir.glob("scene_*.jpg"), key=lambda p: p.name)
-        for i, line in enumerate(lines):
-            line = line.strip()
-            if line and line.replace(".", "").replace("-", "").isdigit():
-                if i < len(frames):
-                    timestamps[frames[i].name] = float(line)
-    except Exception as e:
-        log(f"  ⚠️ ffprobe 批量时间戳提取失败: {e}")
+    frames = sorted(frame_dir.glob("scene_*.jpg"), key=lambda p: p.name)
+    if not frames:
+        return timestamps
+
+    # 逐个探测：文件名不包含内嵌时间戳，用 ffprobe 从帧数据中提取
+    for fp in frames:
+        cmd = [
+            "ffprobe", "-v", "quiet",
+            "-select_streams", "v:0",
+            "-show_entries", "frame=pts_time",
+            "-of", "csv=p=0",
+            str(fp),
+        ]
+        try:
+            result = subprocess.run(
+                cmd, capture_output=True, text=True,
+                timeout=5, encoding="utf-8", errors="replace",
+            )
+            pts_str = result.stdout.strip()
+            if pts_str and pts_str.replace(".", "").replace("-", "").isdigit():
+                timestamps[fp.name] = float(pts_str)
+        except Exception:
+            pass
+    log(f"  提取了 {len(timestamps)}/{len(frames)} 帧的 PTS 时间戳")
     return timestamps
 
 
@@ -372,8 +376,11 @@ def extract_screenshots(
                 cumulative_offset += duration
                 continue
 
-            # 取前 TOP_N_SCORES
-            top_frames = scored[:TOP_N_SCORES]
+            # 取前 TOP_N_SCORES，但排除 score 太低的（< 0.08）
+            top_frames = [sf for sf in scored[:TOP_N_SCORES] if sf["score"] >= 0.08]
+            if not top_frames and scored:
+                # 如果全部低于阈值，至少保留 top 3
+                top_frames = scored[:3]
 
             # Step 4: 截取原分辨率图（只截分数 > 阈值的高信息密度帧）
             for rank, sf in enumerate(top_frames):
