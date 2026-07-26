@@ -315,7 +315,9 @@ def score_frames(frames: list[Path], frame_timestamps: dict[str, float] | None =
     face_penalties = []  # 收集所有人脸惩罚值，用于全视频人脸判断
     for i, fp in enumerate(frames):
         try:
-            img = cv2.imread(str(fp))
+            # 用 imdecode 方式读取，兼容 opencv 中文路径问题
+            raw = np.fromfile(str(fp), dtype=np.uint8)
+            img = cv2.imdecode(raw, cv2.IMREAD_COLOR)
             if img is None or img.size == 0:
                 continue
 
