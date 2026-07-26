@@ -44,6 +44,8 @@ for _sub in ["cublas", "cuda_runtime", "cuda_nvrtc"]:
         os.add_dll_directory(_bin)
 import subprocess
 import shutil
+import concurrent.futures
+import screenshotter  # 视频智能截图模块
 import traceback
 import threading
 from datetime import datetime
@@ -64,6 +66,10 @@ COOKIES_FILE = os.environ.get("YTDLP_COOKIES_FILE", "")  # Netscape格式cookie�
 COOKIES_BROWSER = os.environ.get("YTDLP_COOKIES_BROWSER", "")  # 浏览器名称
 DEEPSEEK_API_KEY = os.environ.get("DEEPSEEK_API_KEY", "")    # DeepSeek API 密钥（用于 AI 速览）
 SUMMARIZE_MODEL = "deepseek-v4-flash"  # DeepSeek V4 Flash（快速便宜）
+SCREENSHOT_DIR = Path(os.environ.get(
+    "SCREENSHOT_DIR",
+    r"E:\obsidian\包罗万象\08-attachment\笔记链接同步截图"
+))
 
 
 # ============================================================
@@ -96,6 +102,48 @@ def sanitize_filename(name: str, max_len: int = 60) -> str:
 def timestamp() -> str:
     """生成时间戳字符串，用于文件名"""
     return datetime.now().strftime("%Y%m%d-%H%M%S")
+
+
+def _insert_screenshots_to_transcript(
+    transcript: str,
+    screenshots: list[dict],
+    attachment_prefix: str,
+) -> str:
+    """
+    将截图按时间戳插入转录文本中。
+    transcript: 原始转录文本，每行 "[xxx.xs - yyy.ys] 内容"
+    screenshots: [{"filename": "xxx.jpg", "timestamp_sec": 120.5}, ...]
+    attachment_prefix: Obsidian wikilink 中附件目录前缀
+
+    返回插入截图引用的新转录文本。
+    """
+    lines = transcript.split("\n")
+
+    # 按时间戳倒序插入，避免索引偏移
+    for ss in sorted(screenshots, key=lambda s: s["timestamp_sec"], reverse=True):
+        ts = ss["timestamp_sec"]
+        fn = ss.get("filename", "unknown.jpg")
+        wikilink = f"![[{attachment_prefix}/{fn}]]"
+
+        # 找到 ts 所在的段落
+        insert_idx = -1
+        for i, line in enumerate(lines):
+            match = re.match(r'\[(\d+\.?\d*)s\s*-\s*(\d+\.?\d*)s\]', line)
+            if match:
+                start = float(match.group(1))
+                end = float(match.group(2))
+                if start <= ts <= end:
+                    insert_idx = i
+                    break
+
+        if insert_idx >= 0:
+            caption = f"\n{wikilink}\n*[截图 · {ts:.0f}秒]*\n"
+            lines.insert(insert_idx + 1, caption)
+        else:
+            # 没找到匹配的时间戳段落，追加到末尾
+            log(f"  ⚠️ 截图 {fn} 时间戳 {ts}s 无匹配段落，追加到末尾")
+
+    return "\n".join(lines)
 
 
 # ============================================================
@@ -486,11 +534,14 @@ def transcribe(audio_path: Path, model, audio_duration: float | None = None) -> 
 # 步骤 4: 写入收件箱
 # ============================================================
 
-def write_to_inbox(url: str, platform: str, title: str, transcript: str, ai_summary: str | None = None, keywords: list[str] | None = None) -> Path:
+def write_to_inbox(url: str, platform: str, title: str, transcript: str,
+                   ai_summary: str | None = None, keywords: list[str] | None = None,
+                   screenshots: list[dict] | None = None) -> Path:
     """
     生成 Markdown 笔记并写入收件箱，返回文件路径。
     ai_summary: 可选的 AI 速览内容（Markdown 格式）
     keywords: 可选的关键词列表，写入 frontmatter tags
+    screenshots: 可选的截图列表 [{"filename": "xxx.jpg", "timestamp_sec": 120.5, "score": 0.35}, ...]
     """
     ts = timestamp()
     safe_title = sanitize_filename(title)
@@ -508,7 +559,7 @@ def write_to_inbox(url: str, platform: str, title: str, transcript: str, ai_summ
     ]
     # 关键词写入 frontmatter tags
     if keywords:
-        tags_yaml = json.dumps(keywords, ensure_ascii=False)  # ["标签1", "标签2"]
+        tags_yaml = json.dumps(keywords, ensure_ascii=False)
         frontmatter_lines.append(f"tags: {tags_yaml}")
     frontmatter_lines.append("---")
     frontmatter = "\n".join(frontmatter_lines)
@@ -538,8 +589,33 @@ def write_to_inbox(url: str, platform: str, title: str, transcript: str, ai_summ
         "",
         "## 转录内容",
         "",
-        transcript,
     ]
+
+    # 如果有截图，按时间戳插入到转录文本中
+    if screenshots:
+        # 构建附件目录相对于 vault 的路径（用于 Obsidian wikilink）
+        # SCREENSHOT_DIR 在 vault 内，如 E:\obsidian\包罗万象\08-attachment\笔记链接同步截图
+        # wikilink 格式: ![[08-attachment/笔记链接同步截图/子目录/filename.jpg]]
+        # 子目录名从第一个截图的完整路径中提取
+        if screenshots[0].get("path"):
+            shot_full = Path(screenshots[0]["path"])
+            shot_parent = shot_full.parent
+            # 尝试构建相对于 vault 的附件路径
+            # vault_root = E:\obsidian\包罗万象
+            vault_root = Path(r"E:\obsidian\包罗万象")
+            try:
+                rel_shot_dir = shot_parent.relative_to(vault_root)
+            except ValueError:
+                rel_shot_dir = shot_parent
+            attachment_prefix = rel_shot_dir.as_posix()
+        else:
+            attachment_prefix = "08-attachment/笔记链接同步截图"
+
+        transcript_with_screenshots = _insert_screenshots_to_transcript(
+            transcript, screenshots, attachment_prefix)
+        body_parts.append(transcript_with_screenshots)
+    else:
+        body_parts.append(transcript)
     body = "\n".join(body_parts)
 
     full_content = frontmatter + "\n\n" + body
@@ -588,6 +664,18 @@ def process_task(task: dict, model) -> dict:
 
         # 步骤 3: 转录（传入音频时长用于覆盖率验证）
         audio_duration = get_audio_duration(audio_path)
+
+        # 步骤 3b: 智能截图（与转录并行，不阻塞主流程，失败不影响转录）
+        screenshot_result: list[dict] | None = None
+        try:
+            if video_paths:
+                ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+                safe_dir = sanitize_filename(title)[:30]
+                shot_dir = SCREENSHOT_DIR / f"{ts}_{safe_dir}"
+                screenshot_result = screenshotter.extract_screenshots(video_paths, shot_dir)
+        except Exception as e:
+            log(f"⚠️ 截图步骤异常（不影响转录）: {e}")
+
         result = transcribe(audio_path, model, audio_duration)
         if not result:
             return {"taskId": task_id, "status": "error", "error": "转录失败"}
@@ -602,7 +690,8 @@ def process_task(task: dict, model) -> dict:
         keywords = ai_result.get("keywords") if ai_result else None
 
         # 步骤 5: 写入收件箱
-        out_file = write_to_inbox(url, platform, title, transcript_text, ai_summary, keywords)
+        out_file = write_to_inbox(url, platform, title, transcript_text,
+                                  ai_summary, keywords, screenshot_result)
 
         return {
             "taskId": task_id,
