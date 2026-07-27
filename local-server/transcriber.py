@@ -44,7 +44,6 @@ for _sub in ["cublas", "cuda_runtime", "cuda_nvrtc"]:
         os.add_dll_directory(_bin)
 import subprocess
 import shutil
-import concurrent.futures
 import screenshotter  # 视频智能截图模块
 import traceback
 import threading
@@ -216,8 +215,8 @@ def download_video(url: str, output_dir: Path) -> list[Path]:
                 # 过滤 yt-dlp 的进度行，只输出关键日志
                 if not line.startswith("[download]") and line.strip():
                     log(f"  yt-dlp: {line[:120]}")
-        except Exception:
-            pass
+        except Exception as e:
+            log(f"  ⚠️ yt-dlp 读取输出异常: {e}")
 
         proc.wait(timeout=600)
 
@@ -679,7 +678,7 @@ def process_task(task: dict, model) -> dict:
         # 步骤 3: 转录（传入音频时长用于覆盖率验证）
         audio_duration = get_audio_duration(audio_path)
 
-        # 步骤 3b: 智能截图（与转录并行，不阻塞主流程，失败不影响转录）
+        # 步骤 3b: 智能截图（在转录之前执行，失败不影响转录）
         screenshot_result: list[dict] | None = None
         try:
             if video_paths:

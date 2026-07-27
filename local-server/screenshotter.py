@@ -313,53 +313,16 @@ def score_frames(frames: list[Path], frame_timestamps: dict[str, float] | None =
         if (i + 1) % 20 == 0:
             log(f"  评分进度: {i + 1}/{len(frames)}")
 
-    # 全视频人脸判断：超过阈值 → 不截图
+    # 全视频人脸判断：超过阈值 → 不截图，直接返回
     if _is_face_dominant(face_penalties):
         log(f"  ⚠️ 人脸主导视频（{sum(1 for p in face_penalties if p > FACE_RATIO_THRESHOLD)}/{len(face_penalties)} 帧人脸 > {FACE_RATIO_THRESHOLD}），跳过截图")
+        return []
 
     results.sort(key=lambda r: r["score"], reverse=True)
     log(f"  评分完成: {len(results)} 帧有效, top-5 分数: " +
         ", ".join(f"{r['score']:.2f}" for r in results[:5]))
 
-    # 人脸主导 → 返回空列表（外层会跳过截图）
-    if _is_face_dominant(face_penalties):
-        return []
-
     return results
-
-
-def _get_frame_timestamps(frame_dir: Path) -> dict[str, float]:
-    """
-    用 ffprobe 批量获取任意图片文件的 PTS 时间戳。
-    逐个文件探测，避免通配符在 Windows 上不工作。
-    返回 {filename: timestamp_sec} 映射。
-    """
-    timestamps = {}
-    frames = sorted(frame_dir.glob("scene_*.jpg"), key=lambda p: p.name)
-    if not frames:
-        return timestamps
-
-    # 逐个探测：文件名不包含内嵌时间戳，用 ffprobe 从帧数据中提取
-    for fp in frames:
-        cmd = [
-            "ffprobe", "-v", "quiet",
-            "-select_streams", "v:0",
-            "-show_entries", "frame=pts_time",
-            "-of", "csv=p=0",
-            str(fp),
-        ]
-        try:
-            result = subprocess.run(
-                cmd, capture_output=True, text=True,
-                timeout=5, encoding="utf-8", errors="replace",
-            )
-            pts_str = result.stdout.strip()
-            if pts_str and pts_str.replace(".", "").replace("-", "").isdigit():
-                timestamps[fp.name] = float(pts_str)
-        except Exception:
-            pass
-    log(f"  提取了 {len(timestamps)}/{len(frames)} 帧的 PTS 时间戳")
-    return timestamps
 
 
 # ============================================================
@@ -388,6 +351,7 @@ def capture_hires(video_path: Path, timestamp_sec: float, output_dir: Path,
         subprocess.run(cmd, check=True, capture_output=True, text=True,
                        timeout=60, encoding="utf-8", errors="replace")
         if out_file.exists() and out_file.stat().st_size > 1000:
+            log(f"  截图成功: {out_file.name} ({out_file.stat().st_size / 1024:.0f} KB)")
             return out_file
     except Exception as e:
         log(f"  ⚠️ 高分辨率截图失败: {e}")
@@ -463,10 +427,12 @@ def extract_screenshots(
                         "filename": hi_path.name,
                         "timestamp_sec": round(ts, 1),
                         "score": sf["score"],
+                        "_vid": vid_idx,
                     })
 
             cumulative_offset += duration
-            log(f"  该视频已截 {len([s for s in screenshots if s.get('_vid', vid_idx) == vid_idx])} 张，累计 {len(screenshots)} 张")
+            vid_count = sum(1 for s in screenshots if s.get("_vid") == vid_idx)
+            log(f"  该视频已截 {vid_count} 张，累计 {len(screenshots)} 张")
 
         if not screenshots:
             log("⚠️ 未产生任何截图（可能视频内容不适合截图）")

@@ -119,8 +119,12 @@ function startTranscriber() {
 
     transcriberReady = false;
 
+    let stdoutBuffer = "";
     transcriberProc.stdout.on("data", (data) => {
-        const lines = data.toString().trim().split("\n");
+        stdoutBuffer += data.toString();
+        const lines = stdoutBuffer.split("\n");
+        // 最后一段可能不完整，保留到下次拼接
+        stdoutBuffer = lines.pop();
         for (const line of lines) {
             if (!line.trim()) continue;
             try {
@@ -173,6 +177,12 @@ function startTranscriber() {
  * 处理 Python 进程返回的结果
  */
 function handleTranscriberResult(result) {
+    if (result.status === "fatal") {
+        console.error(`[transcriber] ❌ 致命错误: ${result.error}`);
+        transcriberReady = false;
+        return;
+    }
+
     if (result.status === "ready") {
         transcriberReady = true;
         console.log("[transcriber] ✅ 模型就绪，开始处理队列...");
@@ -181,7 +191,8 @@ function handleTranscriberResult(result) {
     }
 
     // 找到对应的队列任务
-    const task = transcriptQueue.find(t => t.taskId === result.taskId);
+    const idx = transcriptQueue.findIndex(t => t.taskId === result.taskId);
+    const task = idx >= 0 ? transcriptQueue[idx] : null;
     if (task) {
         if (result.status === "ok") {
             console.log(`[transcriber] ✅ ${task.platform}: ${result.title} → ${result.filePath}`);
@@ -215,13 +226,10 @@ function handleTranscriberResult(result) {
                 console.error("[transcriber] 降级笔记写入失败:", e2.message);
             }
         }
-        // 任务完成，检查是否还有待处理的
-        task.done = true;
+        // 任务完成，从队列中移除
+        transcriptQueue.splice(idx, 1);
+        persistQueue();
     }
-
-    // 清理已完成的任务引用
-    const idx = transcriptQueue.findIndex(t => t.taskId === result.taskId);
-    if (idx >= 0) { transcriptQueue.splice(idx, 1); persistQueue(); }
 
     // 继续处理队列
     drainQueue();

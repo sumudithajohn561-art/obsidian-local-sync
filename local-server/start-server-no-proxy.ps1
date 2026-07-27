@@ -11,13 +11,11 @@ if (Test-Path $envFile) {
         if ($_ -match '^\s*([^#].+?)\s*=\s*(.+)') {
             $envName = $matches[1]
             $envValue = $matches[2]
-            # 设置当前进程环境变量（Node/Python 进程才能读取）
+            # 只设置当前进程环境变量，不写入注册表（安全：防止 API Key 泄露到持久化环境）
             Set-Item -Path "env:$envName" -Value $envValue
-            # 同时写入用户级持久化（登录后依然有效）
-            [System.Environment]::SetEnvironmentVariable($envName, $envValue, [System.EnvironmentVariableTarget]::User)
         }
     }
 }
 
-Set-Location -Path "E:\AI\项目\obsidian同步软件\local-server"
+Set-Location $PSScriptRoot
 node server.js
