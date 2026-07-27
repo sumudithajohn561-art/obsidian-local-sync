@@ -355,6 +355,8 @@ def summarize(transcript_text: str, title: str) -> dict | None:
         log("⚠️ 未设置 DEEPSEEK_API_KEY，跳过 AI 速览")
         return None
 
+    log(f"  调用 DeepSeek API (model={SUMMARIZE_MODEL})...")
+
     # 清理转录文本：去掉时间戳，只留正文
     clean = _SUMMARIZE_CLEAN_RE.sub("", transcript_text).strip()
     if not clean:
@@ -427,30 +429,31 @@ def summarize(transcript_text: str, title: str) -> dict | None:
                     continue
             return None
         except Exception as e:
-            if attempt < 2 and ("Remote end closed" in str(e) or "timeout" in str(e).lower()):
-                log(f"⚠️ AI 速览超时 (第{attempt+1}次)，重试中...")
+            log(f"⚠️ AI 速览异常 (第{attempt+1}次): {type(e).__name__}: {str(e)[:200]}")
+            if attempt < 2:
                 import time as _time
                 _time.sleep(3)
                 continue
-            raise
-
-        if not text.strip():
-            log("⚠️ AI 速览返回为空")
             return None
 
-        # 提取关键词行，并从摘要正文中移除
-        keywords: list[str] = []
-        keyword_re = re.compile(r'^\*?\*?关键词\*?\*?\s*[：:]\s*(.+)', re.MULTILINE)
-        keyword_match = keyword_re.search(text)
-        if keyword_match:
-            raw = keyword_match.group(1).strip()
-            # 用顿号、逗号、/ 拆分关键词
-            keywords = [k.strip() for k in re.split(r'[、,，/]', raw) if k.strip()]
-            # 从正文中移除关键词行
-            text = keyword_re.sub("", text).strip()
+    # 以下在 for 循环外部：break 成功后执行
+    if not text.strip():
+        log("⚠️ AI 速览返回为空")
+        return None
 
-        log(f"✅ AI 速览生成成功 ({len(text)} 字符, {len(keywords)} 个关键词)")
-        return {"summary": text.strip(), "keywords": keywords}
+    # 提取关键词行，并从摘要正文中移除
+    keywords: list[str] = []
+    keyword_re = re.compile(r'^\*?\*?关键词\*?\*?\s*[：:]\s*(.+)', re.MULTILINE)
+    keyword_match = keyword_re.search(text)
+    if keyword_match:
+        raw = keyword_match.group(1).strip()
+        # 用顿号、逗号、/ 拆分关键词
+        keywords = [k.strip() for k in re.split(r'[、,，/]', raw) if k.strip()]
+        # 从正文中移除关键词行
+        text = keyword_re.sub("", text).strip()
+
+    log(f"✅ AI 速览生成成功 ({len(text)} 字符, {len(keywords)} 个关键词)")
+    return {"summary": text.strip(), "keywords": keywords}
 
 
 # ============================================================
