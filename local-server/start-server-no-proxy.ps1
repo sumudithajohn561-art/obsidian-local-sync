@@ -1,4 +1,4 @@
-﻿$env:HTTP_PROXY = ""
+$env:HTTP_PROXY = ""
 $env:HTTPS_PROXY = ""
 $env:YTDLP_PROXY = ""
 $env:WECHAT_TOKEN = "sumu123"
@@ -9,7 +9,12 @@ $envFile = Join-Path $PSScriptRoot ".env"
 if (Test-Path $envFile) {
     Get-Content $envFile | ForEach-Object {
         if ($_ -match '^\s*([^#].+?)\s*=\s*(.+)') {
-            [System.Environment]::SetEnvironmentVariable($matches[1], $matches[2])
+            $envName = $matches[1]
+            $envValue = $matches[2]
+            # 设置当前进程环境变量（Node/Python 进程才能读取）
+            Set-Item -Path "env:$envName" -Value $envValue
+            # 同时写入用户级持久化（登录后依然有效）
+            [System.Environment]::SetEnvironmentVariable($envName, $envValue, [System.EnvironmentVariableTarget]::User)
         }
     }
 }
